@@ -1,0 +1,35 @@
+ui-examples/
+
+# Dependencies
+dictate-app/node_modules/
+
+# Build artifacts
+dictate-app/dist/
+dictate-app/build/
+
+# Runtime data / logs
+dictate-app/**/*.log
+**/dictate.sqlite
+**/dictate.sqlite-shm
+**/dictate.sqlite-wal
+
+# Python sidecar
+dictate-app/sidecar/.venv/
+dictate-app/sidecar/__pycache__/
+dictate-app/sidecar/**/*.py[cod]
+dictate-app/sidecar/.pytest_cache/
+dictate-app/sidecar/.mypy_cache/
+
+# Environment files
+dictate-app/.env
+dictate-app/.env.*
+!dictate-app/.env.example
+
+# Tooling / editor files
+.vscode/
+.idea/
+*.tsbuildinfo
+
+# OS files
+.DS_Store
+Thumbs.db

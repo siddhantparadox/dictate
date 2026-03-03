@@ -1,0 +1,11 @@
+{
+	"name": "dictate-workspace",
+	"private": true,
+	"scripts": {
+		"dev": "bun run --cwd dictate-app dev",
+		"dev:hmr": "bun run --cwd dictate-app dev:hmr",
+		"start": "bun run --cwd dictate-app start",
+		"typecheck": "bun run --cwd dictate-app typecheck",
+		"lint": "bun run --cwd dictate-app lint"
+	}
+}

@@ -1,0 +1,186 @@
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { rpcClient } from "@/mainview/rpc-client";
+import type { ModelId } from "@/shared/models";
+import type { AppSnapshot, ToastPayload } from "@/shared/rpc";
+
+const SNAPSHOT_RETRY_BASE_MS = 250;
+const SNAPSHOT_RETRY_MAX_MS = 1_500;
+
+interface RuntimeErrorState {
+	retryCount: number;
+	message: string;
+}
+
+export interface UseDictateRuntimeResult {
+	snapshot: AppSnapshot | null;
+	settings: AppSnapshot["settings"] | null;
+	models: AppSnapshot["models"];
+	latestToast: ToastPayload | null;
+	lastTranscript: string;
+	isDictating: boolean;
+	isPreparingModelId: ModelId | null;
+	isLoading: boolean;
+	runtimeError: RuntimeErrorState;
+	selectModel: (modelId: ModelId) => Promise<void>;
+	downloadModel: (modelId: ModelId) => Promise<boolean>;
+	startDictation: () => Promise<void>;
+	updateSetting: (
+		next: Partial<AppSnapshot["settings"]>,
+	) => Promise<AppSnapshot["settings"]>;
+}
+
+export function useDictateRuntime(): UseDictateRuntimeResult {
+	const [snapshot, setSnapshot] = useState<AppSnapshot | null>(null);
+	const [runtimeError, setRuntimeError] = useState<RuntimeErrorState>({
+		retryCount: 0,
+		message: "",
+	});
+	const [latestToast, setLatestToast] = useState<ToastPayload | null>(null);
+	const [isDictating, setIsDictating] = useState(false);
+	const [isPreparingModelId, setIsPreparingModelId] = useState<ModelId | null>(
+		null,
+	);
+
+	useEffect(() => {
+		let active = true;
+		let retryTimer: ReturnType<typeof setTimeout> | null = null;
+
+		const bootstrapSnapshot = async (attempt = 0): Promise<void> => {
+			if (attempt === 0) {
+				void rpcClient.logClientEvent(
+					"[bootstrap] requesting initial snapshot",
+				);
+			}
+
+			try {
+				const next = await rpcClient.getSnapshot();
+				if (!active) {
+					return;
+				}
+
+				setSnapshot(next);
+				setRuntimeError({ retryCount: 0, message: "" });
+				void rpcClient.logClientEvent(
+					`[bootstrap] initial snapshot loaded. sidecar=${next.sidecarStatus}`,
+				);
+			} catch (error) {
+				if (!active) {
+					return;
+				}
+				const formattedError =
+					error instanceof Error ? error.message : String(error);
+				setRuntimeError({ retryCount: attempt + 1, message: formattedError });
+				void rpcClient.logClientEvent(
+					`[bootstrap] getSnapshot attempt=${attempt + 1} failed: ${formattedError}`,
+				);
+
+				const retryDelay = Math.min(
+					SNAPSHOT_RETRY_BASE_MS + attempt * 200,
+					SNAPSHOT_RETRY_MAX_MS,
+				);
+				retryTimer = setTimeout(() => {
+					void bootstrapSnapshot(attempt + 1);
+				}, retryDelay);
+			}
+		};
+
+		void bootstrapSnapshot();
+
+		const offSnapshot = rpcClient.onSnapshot((next) => {
+			setSnapshot(next);
+			setRuntimeError({ retryCount: 0, message: "" });
+			void rpcClient.logClientEvent(
+				`[snapshot] push received. state=${next.pill.state}; sidecar=${next.sidecarStatus}`,
+			);
+		});
+		const offToast = rpcClient.onToast((toast) => setLatestToast(toast));
+		void rpcClient.logClientEvent("Mainview initialized.");
+
+		return () => {
+			active = false;
+			if (retryTimer) {
+				clearTimeout(retryTimer);
+			}
+			offSnapshot();
+			offToast();
+		};
+	}, []);
+
+	const settings = snapshot?.settings ?? null;
+	const models = snapshot?.models ?? [];
+	const lastTranscript = useMemo(() => {
+		const jobs = snapshot?.recentJobs ?? [];
+		for (const job of jobs) {
+			const transcript = job.transcript.trim();
+			if (transcript.length > 0) {
+				return transcript;
+			}
+		}
+		return "";
+	}, [snapshot?.recentJobs]);
+
+	const selectModel = useCallback(async (modelId: ModelId): Promise<void> => {
+		try {
+			await rpcClient.setDefaultModel(modelId);
+		} catch (error) {
+			void rpcClient.reportRendererError("selectModel", error);
+		}
+	}, []);
+
+	const updateSetting = useCallback(
+		async (
+			next: Partial<AppSnapshot["settings"]>,
+		): Promise<AppSnapshot["settings"]> => {
+			try {
+				return await rpcClient.updateSettings(next);
+			} catch (error) {
+				void rpcClient.reportRendererError("updateSetting", error);
+				throw error;
+			}
+		},
+		[],
+	);
+
+	const downloadModel = useCallback(
+		async (modelId: ModelId): Promise<boolean> => {
+			setIsPreparingModelId(modelId);
+			try {
+				await rpcClient.prepareModel(modelId);
+				return true;
+			} catch (error) {
+				void rpcClient.reportRendererError("downloadModel", error);
+				return false;
+			} finally {
+				setIsPreparingModelId(null);
+			}
+		},
+		[],
+	);
+
+	const startDictation = useCallback(async (): Promise<void> => {
+		setIsDictating(true);
+		try {
+			await rpcClient.runMicrophoneTranscription();
+		} catch (error) {
+			void rpcClient.reportRendererError("runMicrophoneTranscription", error);
+		} finally {
+			setIsDictating(false);
+		}
+	}, []);
+
+	return {
+		snapshot,
+		settings,
+		models,
+		latestToast,
+		lastTranscript,
+		isDictating,
+		isPreparingModelId,
+		isLoading: !snapshot || !settings,
+		runtimeError,
+		selectModel,
+		downloadModel,
+		startDictation,
+		updateSetting,
+	};
+}

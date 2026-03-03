@@ -1,0 +1,201 @@
+@import url("https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&family=JetBrains+Mono:wght@500&display=swap");
+@import "tailwindcss";
+
+:root {
+	--font-sans: "Manrope", ui-sans-serif, sans-serif;
+	--font-mono: "JetBrains Mono", ui-monospace, monospace;
+	--radius: 0.75rem;
+
+	--text-primary: hsl(225 36% 15%);
+	--text-secondary: hsl(224 17% 36%);
+	--surface-muted: hsl(0 0% 100% / 0.45);
+	--surface-active: hsl(0 0% 100% / 0.72);
+	--surface-hover: hsl(0 0% 100% / 0.9);
+
+	--app-bg:
+		radial-gradient(circle at 8% 4%, hsl(196 88% 93% / 0.9), transparent 40%),
+		radial-gradient(circle at 92% 94%, hsl(224 88% 95% / 0.95), transparent 45%),
+		linear-gradient(160deg, hsl(220 48% 97%), hsl(210 38% 95%));
+
+	--glass-bg: hsl(0 0% 100% / 0.52);
+	--glass-chip: hsl(0 0% 100% / 0.38);
+	--glass-border: hsl(224 30% 72% / 0.42);
+	--glass-border-strong: hsl(224 30% 63% / 0.62);
+	--glass-shadow: 0 24px 60px hsl(220 42% 22% / 0.16);
+	--glass-shadow-soft: hsl(220 34% 38% / 0.15);
+
+	--cta-bg: hsl(221 80% 57%);
+	--cta-text: hsl(0 0% 100%);
+	--toggle-track: hsl(223 22% 85%);
+	--toggle-thumb: hsl(0 0% 100%);
+
+	--ok-bg: hsl(152 60% 94% / 0.86);
+	--ok-border: hsl(153 46% 72% / 0.92);
+	--ok-text: hsl(154 48% 30%);
+	--info-bg: hsl(206 80% 94% / 0.86);
+	--info-border: hsl(205 60% 72% / 0.92);
+	--info-text: hsl(206 55% 34%);
+	--error-bg: hsl(351 90% 95% / 0.9);
+	--error-border: hsl(350 68% 78% / 0.95);
+	--error-text: hsl(350 58% 36%);
+
+	--foreground: 225 36% 15%;
+	--muted-foreground: 224 17% 36%;
+	--card: 0 0% 100%;
+	--card-foreground: 225 36% 15%;
+	--popover: 0 0% 100%;
+	--popover-foreground: 225 36% 15%;
+	--primary: 221 80% 57%;
+	--primary-foreground: 0 0% 100%;
+	--secondary: 220 28% 92%;
+	--secondary-foreground: 224 22% 28%;
+	--muted: 220 30% 93%;
+	--accent: 219 82% 94%;
+	--accent-foreground: 223 42% 28%;
+	--destructive: 350 70% 48%;
+	--destructive-foreground: 0 0% 100%;
+	--border: 224 30% 74%;
+	--input: 224 22% 70%;
+	--background: 220 40% 96%;
+	--ring: 221 80% 57%;
+	color-scheme: light;
+}
+
+html[data-theme="dark"] {
+	--text-primary: hsl(215 32% 93%);
+	--text-secondary: hsl(214 18% 74%);
+	--surface-muted: hsl(226 26% 17% / 0.42);
+	--surface-active: hsl(226 30% 19% / 0.7);
+	--surface-hover: hsl(226 34% 25% / 0.84);
+
+	--app-bg:
+		radial-gradient(circle at 10% 5%, hsl(208 74% 16% / 0.75), transparent 42%),
+		radial-gradient(circle at 94% 90%, hsl(229 72% 15% / 0.8), transparent 48%),
+		linear-gradient(150deg, hsl(229 36% 9%), hsl(222 32% 11%));
+
+	--glass-bg: hsl(226 24% 15% / 0.58);
+	--glass-chip: hsl(226 24% 19% / 0.45);
+	--glass-border: hsl(219 22% 32% / 0.5);
+	--glass-border-strong: hsl(219 24% 40% / 0.7);
+	--glass-shadow: 0 24px 60px hsl(228 52% 4% / 0.55);
+	--glass-shadow-soft: hsl(220 36% 8% / 0.55);
+
+	--cta-bg: hsl(216 90% 62%);
+	--cta-text: hsl(223 45% 10%);
+	--toggle-track: hsl(220 22% 27%);
+	--toggle-thumb: hsl(220 16% 90%);
+
+	--ok-bg: hsl(153 43% 24% / 0.6);
+	--ok-border: hsl(152 38% 38% / 0.84);
+	--ok-text: hsl(146 62% 78%);
+	--info-bg: hsl(206 46% 22% / 0.6);
+	--info-border: hsl(205 42% 38% / 0.84);
+	--info-text: hsl(206 74% 79%);
+	--error-bg: hsl(351 42% 22% / 0.66);
+	--error-border: hsl(350 34% 38% / 0.86);
+	--error-text: hsl(350 84% 83%);
+
+	--foreground: 215 32% 93%;
+	--muted-foreground: 214 18% 74%;
+	--card: 226 27% 16%;
+	--card-foreground: 215 32% 93%;
+	--popover: 226 27% 16%;
+	--popover-foreground: 215 32% 93%;
+	--primary: 216 90% 62%;
+	--primary-foreground: 223 45% 10%;
+	--secondary: 224 21% 20%;
+	--secondary-foreground: 214 18% 84%;
+	--muted: 224 22% 18%;
+	--accent: 218 30% 22%;
+	--accent-foreground: 215 32% 93%;
+	--destructive: 350 58% 44%;
+	--destructive-foreground: 0 0% 100%;
+	--border: 219 22% 35%;
+	--input: 219 22% 34%;
+	--background: 224 34% 10%;
+	--ring: 216 90% 62%;
+	color-scheme: dark;
+}
+
+* {
+	box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+	height: 100%;
+}
+
+body {
+	margin: 0;
+	font-family: var(--font-sans);
+	color: var(--text-primary);
+	transition:
+		background 260ms ease,
+		color 220ms ease;
+}
+
+html[data-view="main"] body {
+	background: var(--app-bg);
+	overflow: hidden;
+}
+
+html[data-view="pill"] body {
+	background: transparent;
+	overflow: hidden;
+}
+
+html[data-view="pill"] #root {
+	width: 100vw;
+	height: 100vh;
+}
+
+.toast-banner {
+	position: fixed;
+	right: 1rem;
+	bottom: 1rem;
+	display: flex;
+	align-items: flex-start;
+	gap: 0.55rem;
+	max-width: 400px;
+	padding: 0.64rem 0.74rem;
+	border-radius: 0.85rem;
+	border: 1px solid var(--glass-border);
+	background: var(--glass-bg);
+	box-shadow: var(--glass-shadow);
+	backdrop-filter: blur(12px) saturate(130%);
+	-webkit-backdrop-filter: blur(12px) saturate(130%);
+	z-index: 40;
+}
+
+.page-enter {
+	animation: page-in 220ms cubic-bezier(0.21, 0.98, 0.55, 1);
+}
+
+@keyframes page-in {
+	from {
+		opacity: 0;
+		transform: translateY(8px);
+	}
+	to {
+		opacity: 1;
+		transform: translateY(0);
+	}
+}
+
+@media (max-width: 740px) {
+	.toast-banner {
+		left: 0.9rem;
+		right: 0.9rem;
+		max-width: none;
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	* {
+		animation: none;
+		transition: none;
+		scroll-behavior: auto;
+	}
+}

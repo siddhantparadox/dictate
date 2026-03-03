@@ -1,0 +1,5 @@
+{
+	"extends": "./tsconfig.json",
+	"include": ["src/mainview", "src/components", "src/lib", "src/shared"],
+	"exclude": ["node_modules", "dist", "build", "src/bun", "../../package/dist"]
+}

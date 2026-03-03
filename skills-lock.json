@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "skills": {
+    "electrobun-best-practices": {
+      "source": "0xbigboss/claude-code",
+      "sourceType": "github",
+      "computedHash": "3a3d7261717521e13fdecaec721dc954f9e5d3d3c5ab49c1bd56b237ca5aa09e"
+    },
+    "electrobun-debugging": {
+      "source": "rajavijayach/electrobun-skills",
+      "sourceType": "github",
+      "computedHash": "d0d5631f38da09de5e9ca1b18d09da31840589f563dcea9fcc3aad496c7fc59d"
+    },
+    "electrobun-distribution": {
+      "source": "rajavijayach/electrobun-skills",
+      "sourceType": "github",
+      "computedHash": "b821518c97f9b645d2785a3ee1aad3c450d208909a888b7f725ea7a6e18c6ee2"
+    },
+    "electrobun-native-ui": {
+      "source": "rajavijayach/electrobun-skills",
+      "sourceType": "github",
+      "computedHash": "ab213b3760a5af83e6509ab1972e334731c24bf299690fe2f9f429382d12dfb1"
+    },
+    "electrobun-rpc-patterns": {
+      "source": "rajavijayach/electrobun-skills",
+      "sourceType": "github",
+      "computedHash": "b338d8c2643940c2ae6dcdf425fb36258af53b25f1886194b934f6c601d7d5f9"
+    },
+    "electrobun-window-management": {
+      "source": "rajavijayach/electrobun-skills",
+      "sourceType": "github",
+      "computedHash": "52b6d0dc21a35e877e33dc62b159bf23bebc896c1d586cdfba7c14a1da02cbe9"
+    },
+    "tailwind-design-system": {
+      "source": "wshobson/agents",
+      "sourceType": "github",
+      "computedHash": "c88178d861802fa836be54e377e82bb67899b6c378807679a1feecd21bf63cb8"
+    }
+  }
+}
