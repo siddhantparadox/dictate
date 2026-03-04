@@ -8,11 +8,14 @@ A fast Electrobun desktop app template with React, Tailwind CSS, and Vite for ho
 # Install dependencies
 bun install
 
-# Recommended: create isolated Python env for sidecar
+# Recommended: create isolated CPU sidecar env
 pwsh -File sidecar/bootstrap.ps1
 
-# Alternative (global user install)
-python -m pip install --upgrade -r sidecar/requirements.txt
+# Optional: create CUDA sidecar env (NVIDIA acceleration)
+pwsh -File sidecar/bootstrap.ps1 -Runtime cuda
+
+# Optional: create both CPU + CUDA envs
+pwsh -File sidecar/bootstrap.ps1 -Runtime both
 
 # Development without HMR (uses bundled assets)
 bun run dev
@@ -69,9 +72,19 @@ When you run `bun run dev` (without HMR):
 ## Dictation MVP Notes
 
 - Global hotkey and tray action run microphone dictation.
-- If `sidecar/.venv/Scripts/python.exe` exists, Dictate auto-uses it for sidecar.
+- Sidecar runtime selection is controlled from `Settings -> ASR Acceleration`.
+- If CUDA is selected and not installed, use the in-app button:
+  - `Settings -> ASR Acceleration -> Install NVIDIA Acceleration`
+- Runtime detection order:
+  - `PYTHON_BIN` (global override)
+  - CPU mode: `sidecar/.venv-cpu/Scripts/python.exe`, then `sidecar/.venv/Scripts/python.exe`
+  - CUDA mode: `sidecar/.venv-cuda/Scripts/python.exe`
 - Python sidecar model backends:
   - `UsefulSensors/moonshine-streaming-medium`
   - `UsefulSensors/moonshine-streaming-tiny`
   - `nvidia/parakeet-tdt-0.6b-v3`
   - `nvidia/canary-qwen-2.5b`
+- App runtime auto-heals `hf_xet` in sidecar envs on startup/runtime switch for faster HF downloads.
+- Model/cache storage location:
+  - Default: `%USERPROFILE%\\.dictateapp\\models\\huggingface\\hub`
+  - Override root with env var: `DICTATE_HOME`

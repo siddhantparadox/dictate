@@ -1,6 +1,8 @@
 import { dlopen, FFIType, type Library } from "bun:ffi";
+import { spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, renameSync } from "node:fs";
+import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import Electrobun, {
 	BrowserView,
@@ -11,10 +13,13 @@ import Electrobun, {
 	Updater,
 	Utils,
 } from "electrobun/bun";
-import type { ModelId } from "../shared/models";
+import { DEFAULT_MODEL_ID, type ModelId } from "../shared/models";
 import type {
 	AppSnapshot,
+	DeleteModelResult,
 	DictateRPC,
+	DictateSettings,
+	InstallAccelerationResult,
 	JobRecord,
 	PrepareModelResult,
 	RecordingPillState,
@@ -22,19 +27,27 @@ import type {
 	TranscriptionResult,
 } from "../shared/rpc";
 import { autoPasteText } from "./autopaste";
+import {
+	applyHardwareSupportToModels,
+	probeHardwareSnapshot,
+} from "./hardware";
 import { SidecarClient } from "./sidecar";
 import { DictateStorage } from "./storage";
 
 const DEV_SERVER_PORT = 5173;
 const DEV_SERVER_URL = `http://localhost:${DEV_SERVER_PORT}`;
 const DEFAULT_MIC_DURATION_SECONDS = 7;
+const MAX_RECENT_JOBS = 30;
 const FALLBACK_HOTKEY = "Ctrl+Shift";
 const PILL_WINDOW_WIDTH = 460;
 const PILL_WINDOW_HEIGHT = 72;
 const PILL_WINDOW_BOTTOM_MARGIN = 22;
 const PILL_HIDE_DELAY_MS = 1300;
 const MODIFIER_HOTKEY_POLL_MS = 30;
-const MODIFIER_HOTKEY_COOLDOWN_MS = 900;
+const MODIFIER_HOTKEY_REARM_MS = 120;
+const CUDA_PROBE_TIMEOUT_MS = 6_000;
+const HF_XET_PROBE_TIMEOUT_MS = 4_000;
+const HF_XET_INSTALL_TIMEOUT_MS = 6 * 60_000;
 
 const VK_CONTROL = 0x11;
 const VK_SHIFT = 0x10;
@@ -49,6 +62,158 @@ type WindowRpc = {
 		toast: (payload: ToastPayload) => Promise<void> | void;
 	};
 };
+
+type AccelerationMode = DictateSettings["accelerationMode"];
+type ModelProgressEntry = NonNullable<
+	AppSnapshot["modelProgressById"][ModelId]
+>;
+const runtimeProbeCache = new Map<string, boolean>();
+const hfXetProbeCache = new Map<string, boolean>();
+const hfXetInstallInFlight = new Map<string, Promise<void>>();
+
+function probeSidecarCudaAvailability(
+	pythonBin: string,
+	options?: { forceRefresh?: boolean },
+): boolean | null {
+	const cached = runtimeProbeCache.get(pythonBin);
+	if (!options?.forceRefresh && typeof cached === "boolean") {
+		return cached;
+	}
+
+	try {
+		const result = spawnSync(
+			pythonBin,
+			[
+				"-c",
+				"import json, torch; print(json.dumps({'cuda': bool(torch.cuda.is_available())}))",
+			],
+			{
+				encoding: "utf8",
+				timeout: CUDA_PROBE_TIMEOUT_MS,
+				windowsHide: true,
+			},
+		);
+		if (result.status !== 0 || !result.stdout.trim()) {
+			return typeof cached === "boolean" ? cached : null;
+		}
+		const parsed = JSON.parse(result.stdout) as { cuda?: unknown };
+		if (typeof parsed.cuda !== "boolean") {
+			return typeof cached === "boolean" ? cached : null;
+		}
+		runtimeProbeCache.set(pythonBin, parsed.cuda);
+		return parsed.cuda;
+	} catch {
+		return typeof cached === "boolean" ? cached : null;
+	}
+}
+
+function probeHfXetAvailability(
+	pythonBin: string,
+	options?: { forceRefresh?: boolean },
+): boolean | null {
+	const cached = hfXetProbeCache.get(pythonBin);
+	if (!options?.forceRefresh && typeof cached === "boolean") {
+		return cached;
+	}
+
+	try {
+		const result = spawnSync(
+			pythonBin,
+			[
+				"-c",
+				"import importlib.util, json; print(json.dumps({'hf_xet': bool(importlib.util.find_spec('hf_xet'))}))",
+			],
+			{
+				encoding: "utf8",
+				timeout: HF_XET_PROBE_TIMEOUT_MS,
+				windowsHide: true,
+			},
+		);
+		if (result.status !== 0 || !result.stdout.trim()) {
+			return typeof cached === "boolean" ? cached : null;
+		}
+		const parsed = JSON.parse(result.stdout) as { hf_xet?: unknown };
+		if (typeof parsed.hf_xet !== "boolean") {
+			return typeof cached === "boolean" ? cached : null;
+		}
+		hfXetProbeCache.set(pythonBin, parsed.hf_xet);
+		return parsed.hf_xet;
+	} catch {
+		return typeof cached === "boolean" ? cached : null;
+	}
+}
+
+function isPathLikeCommand(command: string): boolean {
+	return (
+		command.includes("\\") ||
+		command.includes("/") ||
+		command.toLowerCase().endsWith(".exe")
+	);
+}
+
+function commandExists(command: string): boolean {
+	if (!isPathLikeCommand(command)) {
+		return true;
+	}
+	return existsSync(command);
+}
+
+function pickFirstAvailableCommand(commands: string[]): string {
+	for (const command of commands) {
+		if (commandExists(command)) {
+			return command;
+		}
+	}
+	return "python";
+}
+
+type ResolvedSidecarRuntime = {
+	pythonBin: string;
+	runtime: AppSnapshot["hardware"]["asrRuntime"];
+	warning?: string;
+};
+
+function ensureDirectory(path: string): string {
+	mkdirSync(path, { recursive: true });
+	return path;
+}
+
+function migrateLegacyHfCache(hfHubDir: string): void {
+	const legacyHubDir = join(homedir(), ".cache", "huggingface", "hub");
+	if (!existsSync(legacyHubDir) || legacyHubDir === hfHubDir) {
+		return;
+	}
+
+	try {
+		const entries = readdirSync(legacyHubDir, { withFileTypes: true });
+		for (const entry of entries) {
+			if (!entry.isDirectory() || !entry.name.startsWith("models--")) {
+				continue;
+			}
+
+			const sourcePath = join(legacyHubDir, entry.name);
+			const targetPath = join(hfHubDir, entry.name);
+			if (existsSync(targetPath)) {
+				continue;
+			}
+
+			try {
+				renameSync(sourcePath, targetPath);
+				console.log(`[cache] migrated ${entry.name} -> ${targetPath}`);
+			} catch (error) {
+				console.warn(
+					`[cache] failed to migrate ${entry.name}:`,
+					error instanceof Error ? error.message : error,
+				);
+			}
+		}
+	} catch (error) {
+		console.warn(
+			"[cache] failed to scan legacy Hugging Face cache:",
+			error instanceof Error ? error.message : error,
+		);
+	}
+}
 
 function resolveSidecarScriptPath(): string {
 	const candidates = [
@@ -70,23 +235,206 @@ function resolveSidecarScriptPath(): string {
 	return candidates[0];
 }
 
+function resolveSidecarBootstrapScriptPath(sidecarWorkerPath: string): string {
+	return resolve(sidecarWorkerPath, "..", "bootstrap.ps1");
+}
+
+function resolvePowerShellExecutable(): string {
+	if (process.platform !== "win32") {
+		return "pwsh";
+	}
+
+	const pwshPath = "C:\\Program Files\\PowerShell\\7\\pwsh.exe";
+	if (existsSync(pwshPath)) {
+		return pwshPath;
+	}
+	return "powershell.exe";
+}
+
 const storage = new DictateStorage(Utils.paths.userData);
 const sidecarScript = resolveSidecarScriptPath();
+const sidecarBootstrapScript = resolveSidecarBootstrapScriptPath(sidecarScript);
 const sidecarProjectRoot = resolve(sidecarScript, "..", "..");
-const sidecarVenvPython = join(
+const dictateHomeDir = ensureDirectory(
+	process.env.DICTATE_HOME ?? join(homedir(), ".dictateapp"),
+);
+const dictateModelsDir = ensureDirectory(join(dictateHomeDir, "models"));
+const dictateHfHomeDir = ensureDirectory(join(dictateModelsDir, "huggingface"));
+const dictateHfHubDir = ensureDirectory(join(dictateHfHomeDir, "hub"));
+const dictateTorchHomeDir = ensureDirectory(join(dictateHomeDir, "torch"));
+const dictateMoonshineCacheDir = ensureDirectory(
+	join(dictateModelsDir, "moonshine"),
+);
+migrateLegacyHfCache(dictateHfHubDir);
+const sidecarVenvLegacyPython = join(
 	sidecarProjectRoot,
 	"sidecar",
 	".venv",
 	"Scripts",
 	"python.exe",
 );
-console.log(
-	`[sidecar] using script=${sidecarScript}; python=${process.env.PYTHON_BIN ?? (existsSync(sidecarVenvPython) ? sidecarVenvPython : "python")}`,
+const sidecarVenvCpuPython = join(
+	sidecarProjectRoot,
+	"sidecar",
+	".venv-cpu",
+	"Scripts",
+	"python.exe",
 );
+const sidecarVenvCudaPython = join(
+	sidecarProjectRoot,
+	"sidecar",
+	".venv-cuda",
+	"Scripts",
+	"python.exe",
+);
+const runtimeOverridePython = process.env.PYTHON_BIN ?? null;
+const cpuRuntimeCandidates = [
+	process.env.PYTHON_BIN_CPU,
+	sidecarVenvCpuPython,
+	sidecarVenvLegacyPython,
+	"python",
+].filter((candidate): candidate is string => Boolean(candidate));
+const cudaRuntimeCandidates = [
+	process.env.PYTHON_BIN_CUDA,
+	sidecarVenvCudaPython,
+].filter((candidate): candidate is string => Boolean(candidate));
+
+const baseHardwareSnapshot = probeHardwareSnapshot();
+
+function resolveSidecarRuntime(mode: AccelerationMode): ResolvedSidecarRuntime {
+	if (runtimeOverridePython) {
+		const probe = probeSidecarCudaAvailability(runtimeOverridePython);
+		return {
+			pythonBin: runtimeOverridePython,
+			runtime: probe === true ? "cuda" : probe === false ? "cpu" : "unknown",
+		};
+	}
+
+	const resolveCpuRuntime = (): ResolvedSidecarRuntime => {
+		const pythonBin = pickFirstAvailableCommand(cpuRuntimeCandidates);
+		return {
+			pythonBin,
+			runtime: "cpu",
+		};
+	};
+
+	if (mode === "auto") {
+		for (const candidate of cudaRuntimeCandidates) {
+			if (!commandExists(candidate)) {
+				continue;
+			}
+			const probe = probeSidecarCudaAvailability(candidate);
+			if (probe === true) {
+				return {
+					pythonBin: candidate,
+					runtime: "cuda",
+				};
+			}
+		}
+
+		return resolveCpuRuntime();
+	}
+
+	if (mode === "cpu") {
+		return resolveCpuRuntime();
+	}
+
+	let sawCudaCandidate = false;
+	for (const candidate of cudaRuntimeCandidates) {
+		if (!commandExists(candidate)) {
+			continue;
+		}
+		sawCudaCandidate = true;
+		const probe = probeSidecarCudaAvailability(candidate);
+		if (probe === true) {
+			return {
+				pythonBin: candidate,
+				runtime: "cuda",
+			};
+		}
+	}
+
+	const cpuRuntime = resolveCpuRuntime();
+	return {
+		...cpuRuntime,
+		warning: sawCudaCandidate
+			? "CUDA mode was selected, but the CUDA interpreter is not CUDA-enabled."
+			: "CUDA mode was selected, but no CUDA sidecar runtime is installed. Run: pwsh -File sidecar/bootstrap.ps1 -Runtime cuda",
+	};
+}
+
+function buildHardwareSnapshotForRuntime(
+	runtime: AppSnapshot["hardware"]["asrRuntime"],
+): AppSnapshot["hardware"] {
+	return {
+		...baseHardwareSnapshot,
+		cudaAvailable: runtime === "cuda",
+		asrRuntime: runtime,
+	};
+}
+
+const initialSettings = storage.getSettings();
+const initialRuntime = resolveSidecarRuntime(initialSettings.accelerationMode);
+const sidecarEnvironment = {
+	DICTATE_HOME: dictateHomeDir,
+	HF_HOME: dictateHfHomeDir,
+	HUGGINGFACE_HUB_CACHE: dictateHfHubDir,
+	TORCH_HOME: dictateTorchHomeDir,
+	MOONSHINE_CACHE_DIR: dictateMoonshineCacheDir,
+};
+console.log(
+	`[sidecar] using script=${sidecarScript}; python=${initialRuntime.pythonBin}; mode=${initialSettings.accelerationMode}; runtime=${initialRuntime.runtime}`,
+);
+console.log(
+	`[cache] models=${dictateModelsDir}; hf_home=${dictateHfHomeDir}; hf_hub=${dictateHfHubDir}`,
+);
+let modelProgressById: AppSnapshot["modelProgressById"] = {};
+let modelProgressBroadcastTimer: ReturnType<typeof setTimeout> | null = null;
+
+function scheduleModelProgressBroadcast(): void {
+	if (modelProgressBroadcastTimer) {
+		return;
+	}
+	modelProgressBroadcastTimer = setTimeout(() => {
+		modelProgressBroadcastTimer = null;
+		void broadcastSnapshot({ target: "main" });
+	}, 120);
+}
+
+function setModelProgress(
+	modelId: ModelId,
+	progress: ModelProgressEntry | null,
+): void {
+	if (!progress) {
+		delete modelProgressById[modelId];
+		return;
+	}
+
+	modelProgressById = {
+		...modelProgressById,
+		[modelId]: progress,
+	};
+}
+
 const sidecar = new SidecarClient(
 	sidecarScript,
-	process.env.PYTHON_BIN ??
-		(existsSync(sidecarVenvPython) ? sidecarVenvPython : "python"),
+	initialRuntime.pythonBin,
+	sidecarEnvironment,
+	{
+		onPrepareModelProgress: (event) => {
+			const nextProgress: ModelProgressEntry = {
+				operation: "download",
+				stage: event.stage,
+				message: event.message,
+				progress: event.progress,
+				downloadedBytes: event.downloadedBytes,
+				totalBytes: event.totalBytes,
+				updatedAt: new Date().toISOString(),
+			};
+			setModelProgress(event.modelId, nextProgress);
+			scheduleModelProgressBroadcast();
+		},
+	},
 );
 
 let mainWindow: BrowserWindow | null = null;
@@ -99,6 +447,8 @@ let recordingStartedAt = 0;
 let modifierHotkeyTimer: ReturnType<typeof setInterval> | null = null;
 let modifierHotkeyWasDown = false;
 let lastModifierHotkeyAt = 0;
+let activeHoldToTalkJob: JobRecord | null = null;
+let isOneShotTranscriptionActive = false;
 let user32Library: Library<{
 	GetAsyncKeyState: {
 		args: [typeof FFIType.i32];
@@ -120,8 +470,370 @@ const NO_SPEECH_PATTERNS = [
 	"returned no generated tokens",
 ];
 
+let hardwareSnapshot = buildHardwareSnapshotForRuntime(initialRuntime.runtime);
+let modelsCache = storage.getModels();
+let recentJobsCache = storage.getRecentJobs(MAX_RECENT_JOBS);
+let lastJobCache = storage.getLastJob();
+let accelerationInstallerState: AppSnapshot["accelerationInstaller"] = {
+	status: "idle",
+	mode: null,
+	message: "",
+	updatedAt: new Date().toISOString(),
+};
+let settingsUpdateQueue: Promise<void> = Promise.resolve();
+
 function sleep(ms: number): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isTranscriptionActive(): boolean {
+	return isOneShotTranscriptionActive || activeHoldToTalkJob !== null;
+}
+
+function updateJobCache(job: JobRecord): void {
+	recentJobsCache = [
+		job,
+		...recentJobsCache.filter((candidate) => candidate.id !== job.id),
+	].slice(0, MAX_RECENT_JOBS);
+	lastJobCache = job;
+}
+
+function refreshModelsCache(): void {
+	modelsCache = storage.getModels();
+}
+
+function setAccelerationInstallerState(
+	next: Omit<AppSnapshot["accelerationInstaller"], "updatedAt">,
+): void {
+	accelerationInstallerState = {
+		...next,
+		updatedAt: new Date().toISOString(),
+	};
+}
+
+async function installHfXetIntoRuntime(pythonBin: string): Promise<void> {
+	await new Promise<void>((resolvePromise, rejectPromise) => {
+		const args = ["-m", "pip", "install", "--upgrade", "hf_xet"];
+		const child = spawn(pythonBin, args, {
+			windowsHide: true,
+			stdio: ["ignore", "pipe", "pipe"],
+		});
+		let stderrBuffer = "";
+		let settled = false;
+
+		const finish = (error?: Error) => {
+			if (settled) {
+				return;
+			}
+			settled = true;
+			if (timer) {
+				clearTimeout(timer);
+			}
+			if (error) {
+				rejectPromise(error);
+				return;
+			}
+			resolvePromise();
+		};
+
+		const timer = setTimeout(() => {
+			child.kill();
+			finish(
+				new Error(
+					`hf_xet install timed out after ${HF_XET_INSTALL_TIMEOUT_MS}ms.`,
+				),
+			);
+		}, HF_XET_INSTALL_TIMEOUT_MS);
+
+		child.stdout.on("data", (chunk) => {
+			const output = String(chunk).trim();
+			if (!output) {
+				return;
+			}
+			console.log(`[runtime-heal] ${output}`);
+		});
+
+		child.stderr.on("data", (chunk) => {
+			const output = String(chunk).trim();
+			if (!output) {
+				return;
+			}
+			stderrBuffer = `${stderrBuffer}\n${output}`.trim();
+			console.error(`[runtime-heal] ${output}`);
+		});
+
+		child.on("error", (error) => {
+			finish(new Error(`Failed to start hf_xet install: ${error.message}`));
+		});
+
+		child.on("close", (code) => {
+			if (code === 0) {
+				finish();
+				return;
+			}
+			finish(
+				new Error(
+					`hf_xet install failed with exit code ${code ?? "unknown"}${stderrBuffer ? `: ${stderrBuffer}` : ""}`,
+				),
+			);
+		});
+	});
+}
+
+async function ensureHfXetForRuntime(
+	pythonBin: string,
+	context: string,
+): Promise<void> {
+	if (!commandExists(pythonBin)) {
+		return;
+	}
+
+	const probe = probeHfXetAvailability(pythonBin);
+	if (probe === true) {
+		return;
+	}
+
+	const inFlight = hfXetInstallInFlight.get(pythonBin);
+	if (inFlight) {
+		await inFlight;
+		return;
+	}
+
+	const installPromise = (async () => {
+		console.log(
+			`[runtime-heal] hf_xet missing for ${pythonBin}; installing (context=${context})...`,
+		);
+		try {
+			await installHfXetIntoRuntime(pythonBin);
+			const finalProbe = probeHfXetAvailability(pythonBin, {
+				forceRefresh: true,
+			});
+			if (finalProbe !== true) {
+				throw new Error("hf_xet still unavailable after install.");
+			}
+			console.log(`[runtime-heal] hf_xet ready for ${pythonBin}`);
+		} catch (error) {
+			const message =
+				error instanceof Error
+					? error.message
+					: "Unknown hf_xet install error.";
+			console.warn(
+				`[runtime-heal] failed to install hf_xet for ${pythonBin}: ${message}`,
+			);
+		}
+	})();
+
+	hfXetInstallInFlight.set(pythonBin, installPromise);
+	try {
+		await installPromise;
+	} finally {
+		hfXetInstallInFlight.delete(pythonBin);
+	}
+}
+
+function enqueueSettingsUpdate<T>(operation: () => Promise<T>): Promise<T> {
+	const run = settingsUpdateQueue.then(operation, operation);
+	settingsUpdateQueue = run.then(
+		() => undefined,
+		() => undefined,
+	);
+	return run;
+}
+
+async function runAccelerationBootstrapInstall(mode: "cuda"): Promise<void> {
+	if (process.platform !== "win32") {
+		throw new Error(
+			"Automatic runtime install is currently available on Windows only.",
+		);
+	}
+	if (!existsSync(sidecarBootstrapScript)) {
+		throw new Error(
+			`Sidecar bootstrap script was not found: ${sidecarBootstrapScript}`,
+		);
+	}
+
+	const powerShell = resolvePowerShellExecutable();
+	const args = [
+		"-NoProfile",
+		"-ExecutionPolicy",
+		"Bypass",
+		"-File",
+		sidecarBootstrapScript,
+		"-Runtime",
+		mode,
+	];
+
+	await new Promise<void>((resolvePromise, rejectPromise) => {
+		const child = spawn(powerShell, args, {
+			cwd: sidecarProjectRoot,
+			windowsHide: true,
+			stdio: ["ignore", "pipe", "pipe"],
+		});
+
+		let stderrBuffer = "";
+
+		child.stdout.on("data", (chunk) => {
+			const output = String(chunk).trim();
+			if (!output) {
+				return;
+			}
+			console.log(`[runtime-install] ${output}`);
+		});
+
+		child.stderr.on("data", (chunk) => {
+			const output = String(chunk).trim();
+			if (!output) {
+				return;
+			}
+			stderrBuffer = `${stderrBuffer}\n${output}`.trim();
+			console.error(`[runtime-install] ${output}`);
+		});
+
+		child.on("error", (error) => {
+			rejectPromise(
+				new Error(`Failed to start runtime installer: ${error.message}`),
+			);
+		});
+
+		child.on("close", (code) => {
+			if (code === 0) {
+				resolvePromise();
+				return;
+			}
+			rejectPromise(
+				new Error(
+					`Runtime installer failed with exit code ${code ?? "unknown"}${stderrBuffer ? `: ${stderrBuffer}` : ""}`,
+				),
+			);
+		});
+	});
+}
+
+async function applyAccelerationMode(mode: AccelerationMode): Promise<void> {
+	const runtime = resolveSidecarRuntime(mode);
+	sidecar.setPythonBin(runtime.pythonBin);
+	hardwareSnapshot = buildHardwareSnapshotForRuntime(runtime.runtime);
+	void ensureHfXetForRuntime(runtime.pythonBin, `mode:${mode}`);
+	console.log(
+		`[sidecar] acceleration mode=${mode}; python=${runtime.pythonBin}; runtime=${runtime.runtime}`,
+	);
+	if (mode === "cuda" && runtime.runtime !== "cuda") {
+		await sendToast({
+			type: "warning",
+			title: "CUDA unavailable",
+			message:
+				runtime.warning ??
+				"CUDA runtime was requested, but current sidecar environment is not CUDA-enabled. Running on CPU.",
+		});
+	}
+}
+
+async function installAccelerationRuntime(
+	mode: "cuda",
+): Promise<InstallAccelerationResult> {
+	if (isTranscriptionActive()) {
+		throw new Error(
+			"Wait for transcription to finish before installing runtime.",
+		);
+	}
+	if (accelerationInstallerState.status === "installing") {
+		throw new Error("Runtime installation is already in progress.");
+	}
+
+	const existingRuntime = resolveSidecarRuntime(mode);
+	if (existingRuntime.runtime === "cuda") {
+		sidecar.setPythonBin(existingRuntime.pythonBin);
+		hardwareSnapshot = buildHardwareSnapshotForRuntime(existingRuntime.runtime);
+		void ensureHfXetForRuntime(
+			existingRuntime.pythonBin,
+			"install-runtime:existing",
+		);
+		setAccelerationInstallerState({
+			status: "success",
+			mode,
+			message: "NVIDIA acceleration runtime is already installed.",
+		});
+		await broadcastSnapshot({ target: "main" });
+		return {
+			mode,
+			status: "installed",
+			pythonBin: existingRuntime.pythonBin,
+			runtime: existingRuntime.runtime,
+		};
+	}
+
+	setAccelerationInstallerState({
+		status: "installing",
+		mode,
+		message:
+			"Installing NVIDIA acceleration runtime. This can take several minutes.",
+	});
+	await broadcastSnapshot({ target: "main" });
+
+	try {
+		await runAccelerationBootstrapInstall(mode);
+		for (const candidate of cudaRuntimeCandidates) {
+			runtimeProbeCache.delete(candidate);
+		}
+		const settings = storage.getSettings();
+		await applyAccelerationMode(settings.accelerationMode);
+
+		setAccelerationInstallerState({
+			status: "success",
+			mode,
+			message: "NVIDIA acceleration runtime is installed.",
+		});
+		await broadcastSnapshot({ target: "main" });
+		setTimeout(() => {
+			if (accelerationInstallerState.status !== "success") {
+				return;
+			}
+			setAccelerationInstallerState({
+				status: "idle",
+				mode: null,
+				message: "",
+			});
+			void broadcastSnapshot({ target: "main" });
+		}, 3_000);
+
+		return {
+			mode,
+			status: "installed",
+			pythonBin: sidecar.getPythonBin(),
+			runtime: hardwareSnapshot.asrRuntime,
+		};
+	} catch (error) {
+		const message =
+			error instanceof Error
+				? error.message
+				: "Unknown runtime installation error.";
+		setAccelerationInstallerState({
+			status: "error",
+			mode,
+			message,
+		});
+		await sendToast({
+			type: "error",
+			title: "Runtime install failed",
+			message,
+		});
+		await broadcastSnapshot({ target: "main" });
+		throw error;
+	}
+}
+
+function getModelForCurrentHardware(modelId: ModelId) {
+	return applyHardwareSupportToModels(modelsCache, hardwareSnapshot).find(
+		(model) => model.id === modelId,
+	);
+}
+
+function getUnsupportedModelReason(modelId: ModelId): string | null {
+	const model = getModelForCurrentHardware(modelId);
+	if (!model || model.hardwareSupport !== "unsupported") {
+		return null;
+	}
+	return model.hardwareReason ?? "Model is not supported on this hardware.";
 }
 
 function normalizeHotkey(hotkey: string): string {
@@ -169,6 +881,9 @@ function stopModifierHotkeyPolling(): void {
 		clearInterval(modifierHotkeyTimer);
 		modifierHotkeyTimer = null;
 	}
+	if (modifierHotkeyWasDown) {
+		void stopHoldToTalkTranscription("global-hotkey");
+	}
 	modifierHotkeyWasDown = false;
 }
 
@@ -191,10 +906,13 @@ function startModifierHotkeyPolling(): boolean {
 
 		if (comboDown && !modifierHotkeyWasDown) {
 			const now = Date.now();
-			if (now - lastModifierHotkeyAt > MODIFIER_HOTKEY_COOLDOWN_MS) {
+			if (now - lastModifierHotkeyAt > MODIFIER_HOTKEY_REARM_MS) {
 				lastModifierHotkeyAt = now;
-				void runMicrophoneTranscription("global-hotkey");
+				void startHoldToTalkTranscription("global-hotkey");
 			}
+		}
+		if (!comboDown && modifierHotkeyWasDown) {
+			void stopHoldToTalkTranscription("global-hotkey");
 		}
 
 		modifierHotkeyWasDown = comboDown;
@@ -238,10 +956,13 @@ function getSnapshot(): AppSnapshot {
 			pillState: currentPill.state,
 			pill: { ...currentPill },
 			settings: storage.getSettings(),
-			models: storage.getModels(),
+			models: applyHardwareSupportToModels(modelsCache, hardwareSnapshot),
+			hardware: hardwareSnapshot,
+			accelerationInstaller: accelerationInstallerState,
+			modelProgressById,
 			sidecarStatus: sidecar.getStatus(),
-			lastJob: storage.getLastJob(),
-			recentJobs: storage.getRecentJobs(30),
+			lastJob: lastJobCache,
+			recentJobs: recentJobsCache,
 		};
 	} catch (error) {
 		console.error(
@@ -260,15 +981,24 @@ function getWindowRpc(windowRef: BrowserWindow | null): WindowRpc | null {
 	return windowRef.webview.rpc as unknown as WindowRpc;
 }
 
-function getWindowRpcs(): WindowRpc[] {
+function getWindowRpcs(target: "all" | "main" | "pill" = "all"): WindowRpc[] {
+	if (target === "main") {
+		return [getWindowRpc(mainWindow)].filter(Boolean) as WindowRpc[];
+	}
+	if (target === "pill") {
+		return [getWindowRpc(pillWindow)].filter(Boolean) as WindowRpc[];
+	}
+
 	return [getWindowRpc(mainWindow), getWindowRpc(pillWindow)].filter(
 		Boolean,
 	) as WindowRpc[];
 }
 
-async function broadcastSnapshot(): Promise<void> {
+async function broadcastSnapshot(options?: {
+	target?: "all" | "main" | "pill";
+}): Promise<void> {
 	const snapshot = getSnapshot();
-	const rpcs = getWindowRpcs();
+	const rpcs = getWindowRpcs(options?.target ?? "all");
 	const results = await Promise.allSettled(
 		rpcs.map((rpc) => Promise.resolve(rpc.send.snapshotUpdated(snapshot))),
 	);
@@ -283,11 +1013,13 @@ async function broadcastSnapshot(): Promise<void> {
 }
 
 async function sendToast(payload: ToastPayload): Promise<void> {
-	Utils.showNotification({
-		title: payload.title,
-		body: payload.message,
-		silent: false,
-	});
+	if (payload.type === "error" || payload.type === "warning") {
+		Utils.showNotification({
+			title: payload.title,
+			body: payload.message,
+			silent: false,
+		});
+	}
 
 	const rpcs = getWindowRpcs();
 	const results = await Promise.allSettled(
@@ -349,7 +1081,10 @@ function stopRecordingTicker(): void {
 	recordingTicker = null;
 }
 
-async function updatePill(next: Partial<AppSnapshot["pill"]>): Promise<void> {
+async function updatePill(
+	next: Partial<AppSnapshot["pill"]>,
+	options?: { target?: "all" | "main" | "pill" },
+): Promise<void> {
 	currentPill = {
 		...currentPill,
 		...next,
@@ -360,7 +1095,7 @@ async function updatePill(next: Partial<AppSnapshot["pill"]>): Promise<void> {
 	} else {
 		hidePillWindow();
 	}
-	await broadcastSnapshot();
+	await broadcastSnapshot({ target: options?.target ?? "all" });
 }
 
 async function setPillState(next: RecordingPillState): Promise<void> {
@@ -397,12 +1132,17 @@ function startRecordingPill(): void {
 
 	recordingTicker = setInterval(() => {
 		const durationMs = Date.now() - recordingStartedAt;
-		void updatePill({
-			state: "recording",
-			visible: true,
-			durationMs,
-			waveformBars: createWaveformBars(),
-		});
+		void updatePill(
+			{
+				state: "recording",
+				visible: true,
+				durationMs,
+				waveformBars: createWaveformBars(),
+			},
+			{
+				target: "pill",
+			},
+		);
 	}, 120);
 }
 
@@ -440,13 +1180,15 @@ function finalizeJob(
 		detail: next.detail,
 		transcript,
 	});
-	return {
+	const updatedJob = {
 		...job,
 		status: next.status,
 		updatedAt,
 		detail: next.detail,
 		transcript,
 	};
+	updateJobCache(updatedJob);
+	return updatedJob;
 }
 
 function isNoSpeechErrorMessage(message: string): boolean {
@@ -535,14 +1277,29 @@ async function runMicrophoneTranscription(
 	source: string,
 	durationSeconds = DEFAULT_MIC_DURATION_SECONDS,
 ): Promise<TranscriptionResult> {
+	if (isTranscriptionActive()) {
+		throw new Error("A transcription is already in progress.");
+	}
+
+	isOneShotTranscriptionActive = true;
 	const settings = storage.getSettings();
 	const modelId = settings.defaultModelId;
+	const unsupportedReason = getUnsupportedModelReason(modelId);
+	if (unsupportedReason) {
+		await sendToast({
+			type: "error",
+			title: "Model not supported",
+			message: unsupportedReason,
+		});
+		throw new Error(unsupportedReason);
+	}
 	const clampedDuration = Math.max(
 		2,
 		Math.min(20, Math.round(durationSeconds)),
 	);
 	const job = createInitialJob(modelId, source);
 	storage.insertJob(job);
+	updateJobCache(job);
 	startRecordingPill();
 
 	try {
@@ -568,15 +1325,91 @@ async function runMicrophoneTranscription(
 		return completeTranscription(job, raceResult.result);
 	} catch (error) {
 		return failTranscription(job, error);
+	} finally {
+		isOneShotTranscriptionActive = false;
+	}
+}
+
+async function startHoldToTalkTranscription(source: string): Promise<void> {
+	if (isTranscriptionActive()) {
+		return;
+	}
+
+	const settings = storage.getSettings();
+	const modelId = settings.defaultModelId;
+	const unsupportedReason = getUnsupportedModelReason(modelId);
+	if (unsupportedReason) {
+		await sendToast({
+			type: "error",
+			title: "Model not supported",
+			message: unsupportedReason,
+		});
+		return;
+	}
+	const job = createInitialJob(modelId, source);
+	storage.insertJob(job);
+	updateJobCache(job);
+	activeHoldToTalkJob = job;
+	startRecordingPill();
+	await broadcastSnapshot({ target: "main" });
+
+	try {
+		await sidecar.startMicrophoneCapture();
+	} catch (error) {
+		if (activeHoldToTalkJob?.id === job.id) {
+			activeHoldToTalkJob = null;
+			await failTranscription(job, error);
+		}
+	}
+}
+
+async function stopHoldToTalkTranscription(source: string): Promise<void> {
+	const job = activeHoldToTalkJob;
+	if (!job) {
+		return;
+	}
+	activeHoldToTalkJob = null;
+
+	finalizeJob(job, {
+		status: "transcribing",
+		detail: `source=${source}; mode=microphone; stage=transcribing`,
+	});
+	await setTranscribingPill();
+
+	try {
+		const result = await sidecar.finishMicrophoneCapture(job.modelId);
+		await completeTranscription(job, result);
+	} catch (error) {
+		await failTranscription(job, error);
 	}
 }
 
 async function prepareModel(modelId: ModelId): Promise<PrepareModelResult> {
+	const unsupportedReason = getUnsupportedModelReason(modelId);
+	if (unsupportedReason) {
+		await sendToast({
+			type: "error",
+			title: "Model not supported",
+			message: unsupportedReason,
+		});
+		throw new Error(unsupportedReason);
+	}
+
 	console.log(`[model] prepare requested for ${modelId}`);
 	storage.setModelStatus(modelId, {
 		installed: false,
 		status: "downloading",
 	});
+	setModelProgress(modelId, {
+		operation: "download",
+		stage: "queued",
+		message: "Preparing model download...",
+		progress: 0,
+		downloadedBytes: 0,
+		totalBytes: null,
+		updatedAt: new Date().toISOString(),
+	});
+	refreshModelsCache();
 	await broadcastSnapshot();
 
 	try {
@@ -584,16 +1417,22 @@ async function prepareModel(modelId: ModelId): Promise<PrepareModelResult> {
 		console.log(
 			`[model] prepare completed for ${modelId} in ${result.latencyMs}ms`,
 		);
+		setModelProgress(modelId, {
+			operation: "download",
+			stage: "installed",
+			message: "Model is ready.",
+			progress: 1,
+			downloadedBytes: modelProgressById[modelId]?.downloadedBytes ?? null,
+			totalBytes: modelProgressById[modelId]?.totalBytes ?? null,
+			updatedAt: new Date().toISOString(),
+		});
 		storage.setModelStatus(modelId, {
 			installed: true,
 			status: "installed",
 		});
-		await sendToast({
-			type: "success",
-			title: "Model ready",
-			message: "Model download completed and is ready to use.",
-		});
+		refreshModelsCache();
 		await broadcastSnapshot();
+		setModelProgress(modelId, null);
 		return {
 			modelId,
 			status: "installed",
@@ -608,6 +1447,19 @@ async function prepareModel(modelId: ModelId): Promise<PrepareModelResult> {
 			installed: false,
 			status: "error",
 		});
+		setModelProgress(modelId, {
+			operation: "download",
+			stage: "error",
+			message:
+				error instanceof Error
+					? error.message
+					: "Unknown model preparation error.",
+			progress: modelProgressById[modelId]?.progress ?? null,
+			downloadedBytes: modelProgressById[modelId]?.downloadedBytes ?? null,
+			totalBytes: modelProgressById[modelId]?.totalBytes ?? null,
+			updatedAt: new Date().toISOString(),
+		});
+		refreshModelsCache();
 		await sendToast({
 			type: "error",
 			title: "Model download failed",
@@ -615,6 +1467,89 @@ async function prepareModel(modelId: ModelId): Promise<PrepareModelResult> {
 				error instanceof Error
 					? error.message
 					: "Unknown error while preparing model.",
+		});
+		await broadcastSnapshot();
+		setModelProgress(modelId, null);
+		throw error;
+	}
+}
+
+function resolveDefaultModelAfterDelete(deletedModelId: ModelId): ModelId {
+	const installedFallback = modelsCache.find(
+		(model) =>
+			model.id !== deletedModelId &&
+			model.installed &&
+			model.status === "installed",
+	)?.id;
+	if (installedFallback) {
+		return installedFallback;
+	}
+
+	if (deletedModelId !== DEFAULT_MODEL_ID) {
+		return DEFAULT_MODEL_ID;
+	}
+
+	const firstAlternative = modelsCache.find(
+		(model) => model.id !== deletedModelId,
+	)?.id;
+	return firstAlternative ?? DEFAULT_MODEL_ID;
+}
+
+async function deleteModel(modelId: ModelId): Promise<DeleteModelResult> {
+	if (isTranscriptionActive()) {
+		throw new Error(
+			"Wait for transcription to finish before deleting a model.",
+		);
+	}
+
+	console.log(`[model] delete requested for ${modelId}`);
+	storage.setModelStatus(modelId, {
+		installed: true,
+		status: "deleting",
+	});
+	refreshModelsCache();
+	await broadcastSnapshot();
+
+	try {
+		const result = await sidecar.deleteModel(modelId);
+		console.log(
+			`[model] delete completed for ${modelId} in ${result.latencyMs}ms (removed_paths=${result.removedPaths.length})`,
+		);
+		storage.setModelStatus(modelId, {
+			installed: false,
+			status: "not_installed",
+		});
+		const settings = storage.getSettings();
+		if (settings.defaultModelId === modelId) {
+			storage.updateSettings({
+				defaultModelId: resolveDefaultModelAfterDelete(modelId),
+			});
+		}
+		refreshModelsCache();
+		await broadcastSnapshot();
+		return {
+			modelId,
+			status: "deleted",
+			latencyMs: result.latencyMs,
+			removedPaths: result.removedPaths,
+		};
+	} catch (error) {
+		console.error(
+			`[model] delete failed for ${modelId}:`,
+			error instanceof Error ? (error.stack ?? error.message) : error,
+		);
+		storage.setModelStatus(modelId, {
+			installed: true,
+			status: "installed",
+		});
+		refreshModelsCache();
+		await sendToast({
+			type: "error",
+			title: "Model delete failed",
+			message:
+				error instanceof Error
+					? error.message
+					: "Unknown error while deleting model.",
 		});
 		await broadcastSnapshot();
 		throw error;
@@ -636,7 +1571,12 @@ function registerGlobalHotkey(hotkey: string): boolean {
 
 	stopModifierHotkeyPolling();
 	const isRegistered = GlobalShortcut.register(accelerator, () => {
-		void runMicrophoneTranscription("global-hotkey");
+		void runMicrophoneTranscription("global-hotkey").catch((error) => {
+			console.error(
+				"[transcription] global hotkey request failed:",
+				error instanceof Error ? error.message : error,
+			);
+		});
 	});
 
 	if (!isRegistered) {
@@ -657,15 +1597,27 @@ function createWindowRpc(windowName: "main" | "pill") {
 					);
 					return snapshot;
 				},
-				updateSettings: (next) => {
-					const previous = storage.getSettings();
-					const merged = storage.updateSettings(next);
-					if (previous.hotkey !== merged.hotkey) {
-						registerGlobalHotkey(merged.hotkey);
-					}
-					void broadcastSnapshot();
-					return merged;
-				},
+				updateSettings: async (next) =>
+					enqueueSettingsUpdate(async () => {
+						const previous = storage.getSettings();
+						const merged = storage.updateSettings(next);
+						if (previous.hotkey !== merged.hotkey) {
+							registerGlobalHotkey(merged.hotkey);
+						}
+						if (previous.accelerationMode !== merged.accelerationMode) {
+							if (isTranscriptionActive()) {
+								storage.updateSettings({
+									accelerationMode: previous.accelerationMode,
+								});
+								throw new Error(
+									"Wait for the current transcription to finish before changing ASR acceleration.",
+								);
+							}
+							await applyAccelerationMode(merged.accelerationMode);
+						}
+						await broadcastSnapshot();
+						return merged;
+					}),
 				setDefaultModel: ({ modelId }) => {
 					storage.updateSettings({ defaultModelId: modelId });
 					void broadcastSnapshot();
@@ -677,6 +1629,9 @@ function createWindowRpc(windowName: "main" | "pill") {
 						durationSeconds ?? DEFAULT_MIC_DURATION_SECONDS,
 					),
 				prepareModel: async ({ modelId }) => prepareModel(modelId),
+				deleteModel: async ({ modelId }) => deleteModel(modelId),
+				installAccelerationRuntime: async ({ mode }) =>
+					installAccelerationRuntime(mode),
 				windowControl: ({ action }) => {
 					if (windowName !== "main" || !mainWindow) {
 						return { maximized: false };
@@ -707,9 +1662,6 @@ function createWindowRpc(windowName: "main" | "pill") {
 			messages: {
 				logClientEvent: ({ message }) => {
 					console.log(`[renderer:${windowName}] ${message}`);
-					if (message.includes("Mainview initialized")) {
-						void broadcastSnapshot();
-					}
 				},
 			},
 		},
@@ -739,7 +1691,12 @@ function createTray(): Tray {
 		}
 
 		if (action === "dictate") {
-			void runMicrophoneTranscription("tray-menu");
+			void runMicrophoneTranscription("tray-menu").catch((error) => {
+				console.error(
+					"[transcription] tray request failed:",
+					error instanceof Error ? error.message : error,
+				);
+			});
 			return;
 		}
 
@@ -799,6 +1756,18 @@ async function bootstrap(): Promise<void> {
 
 	const settings = storage.getSettings();
 	registerGlobalHotkey(settings.hotkey || FALLBACK_HOTKEY);
+	const managedRuntimes = [
+		sidecarVenvLegacyPython,
+		sidecarVenvCpuPython,
+		sidecarVenvCudaPython,
+	];
+	for (const runtimePython of managedRuntimes) {
+		if (!commandExists(runtimePython)) {
+			continue;
+		}
+		void ensureHfXetForRuntime(runtimePython, "startup");
+	}
+	void ensureHfXetForRuntime(initialRuntime.pythonBin, "startup:active");
 	await broadcastSnapshot();
 
 	console.log("Dictate MVP started.");

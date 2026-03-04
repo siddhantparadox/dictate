@@ -2,5 +2,5 @@ numpy
 scipy
 sounddevice
 moonshine-voice
-torch
 nemo_toolkit[asr]
+huggingface_hub[hf_xet]

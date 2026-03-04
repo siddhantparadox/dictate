@@ -22,6 +22,7 @@ import {
 	getThemePreference,
 	type ThemePreference,
 } from "@/mainview/theme";
+import type { ModelId } from "@/shared/models";
 
 type MainSection = "overview" | "history" | "models" | "settings";
 
@@ -58,17 +59,47 @@ function pillLabel(
 }
 
 function modelStatusLabel(
-	status: "not_installed" | "downloading" | "installed" | "error",
+	status: "not_installed" | "downloading" | "deleting" | "installed" | "error",
 ): string {
 	switch (status) {
 		case "downloading":
 			return "Downloading";
+		case "deleting":
+			return "Removing";
 		case "installed":
 			return "Installed";
 		case "error":
 			return "Download failed";
 		default:
 			return "Not installed";
+	}
+}
+
+function hardwareSupportLabel(
+	status: "ready" | "works_slow" | "unsupported" | undefined,
+): string {
+	switch (status) {
+		case "ready":
+			return "Ready";
+		case "unsupported":
+			return "Not supported";
+		default:
+			return "Works but slower";
+	}
+}
+
+function modelRuntimeLabel(runtime: "cpu" | "nvidia_gpu"): string {
+	return runtime === "nvidia_gpu" ? "CUDA GPU" : "CPU";
+}
+
+function accelerationModeLabel(mode: "auto" | "cpu" | "cuda"): string {
+	switch (mode) {
+		case "cuda":
+			return "CUDA";
+		case "cpu":
+			return "CPU";
+		default:
+			return "Auto";
 	}
 }
 
@@ -80,6 +111,25 @@ function formatTimestamp(iso: string): string {
 	return time.toLocaleString();
 }
 
+function formatBytes(bytes: number | null | undefined): string | null {
+	if (typeof bytes !== "number" || !Number.isFinite(bytes) || bytes < 0) {
+		return null;
+	}
+	if (bytes < 1024) {
+		return `${bytes} B`;
+	}
+
+	const units = ["KB", "MB", "GB", "TB"] as const;
+	let value = bytes / 1024;
+	let unitIndex = 0;
+	while (value >= 1024 && unitIndex < units.length - 1) {
+		value /= 1024;
+		unitIndex += 1;
+	}
+	const decimals = value >= 100 ? 0 : value >= 10 ? 1 : 2;
+	return `${value.toFixed(decimals)} ${units[unitIndex]}`;
+}
+
 function App() {
 	const runtime = useDictateRuntime();
 	const [themePreference, setThemePreference] = useState<ThemePreference>(
@@ -87,6 +137,8 @@ function App() {
 	);
 	const [activeSection, setActiveSection] = useState<MainSection>("overview");
 	const [isWindowMaximized, setIsWindowMaximized] = useState(false);
+	const [confirmDeleteModelId, setConfirmDeleteModelId] =
+		useState<ModelId | null>(null);
 
 	useEffect(() => {
 		let active = true;
@@ -99,6 +151,19 @@ function App() {
 			active = false;
 		};
 	}, []);
+
+	useEffect(() => {
+		if (!confirmDeleteModelId) {
+			return;
+		}
+
+		const model = runtime.models.find(
+			(candidate) => candidate.id === confirmDeleteModelId,
+		);
+		if (!model || model.status !== "installed") {
+			setConfirmDeleteModelId(null);
+		}
+	}, [confirmDeleteModelId, runtime.models]);
 
 	if (runtime.isLoading || !runtime.settings || !runtime.snapshot) {
 		return (
@@ -121,6 +186,22 @@ function App() {
 	const settings = runtime.settings;
 	const snapshot = runtime.snapshot;
 	const sidecar = snapshot.sidecarStatus;
+	const accelerationInstaller = snapshot.accelerationInstaller;
+	const showCudaInstaller =
+		settings.accelerationMode === "cuda" &&
+		snapshot.hardware.asrRuntime === "cpu";
+	const isCudaRuntimePending =
+		settings.accelerationMode === "cuda" &&
+		snapshot.hardware.asrRuntime === "unknown";
+	const isInstallingCuda =
+		accelerationInstaller.status === "installing" &&
+		accelerationInstaller.mode === "cuda";
+	const toastToRender =
+		runtime.latestToast &&
+		(runtime.latestToast.type === "error" ||
+			runtime.latestToast.type === "warning")
+			? runtime.latestToast
+			: null;
 
 	return (
 		<div className="workspace-root">
@@ -263,11 +344,12 @@ function App() {
 							<div className="content-stack">
 								<section className="hero-card">
 									<h1>
-										Press <kbd>Ctrl</kbd> + <kbd>Shift</kbd>, speak, and
-										continue typing.
+										Hold <kbd>Ctrl</kbd> + <kbd>Shift</kbd>, speak, release, and
+										keep typing.
 									</h1>
 									<p>
-										Audio is transcribed and pasted into the active text box.
+										Audio captures while held, then transcribes and pastes into
+										the active text box.
 									</p>
 									<div className="hero-actions">
 										<button
@@ -294,9 +376,28 @@ function App() {
 								</section>
 
 								<section className="info-card">
-									<p className="sidebar-label">Latest Transcript</p>
+									<p className="sidebar-label">Latest Successful Transcript</p>
 									<p className="transcript-line">
 										{runtime.lastTranscript || "No transcript yet."}
+									</p>
+								</section>
+
+								<section className="info-card">
+									<p className="sidebar-label">Hardware</p>
+									<p className="transcript-line">
+										{snapshot.hardware.cpuModel} • {snapshot.hardware.cpuCores}{" "}
+										cores
+									</p>
+									<p className="history-model">
+										RAM {snapshot.hardware.totalRamGb} GB •{" "}
+										{snapshot.hardware.gpuName
+											? `${snapshot.hardware.gpuName}${
+													snapshot.hardware.gpuVramGb
+														? ` (${snapshot.hardware.gpuVramGb} GB VRAM)`
+														: ""
+												}`
+											: "No dedicated GPU detected"}{" "}
+										• ASR runtime {snapshot.hardware.asrRuntime.toUpperCase()}
 									</p>
 								</section>
 							</div>
@@ -335,23 +436,71 @@ function App() {
 						) : null}
 
 						{activeSection === "models" ? (
-							<div className="content-stack">
-								<section className="info-card">
+							<div className="content-stack models-stack">
+								<section className="info-card model-library-card">
 									<p className="sidebar-label">Available Models</p>
 									<ul className="model-list">
 										{runtime.models.map((model) => {
 											const isActive = model.id === settings.defaultModelId;
+											const isUnsupported =
+												model.hardwareSupport === "unsupported";
 											const isDownloading =
 												model.status === "downloading" ||
 												runtime.isPreparingModelId === model.id;
+											const isDeleting =
+												model.status === "deleting" ||
+												runtime.isDeletingModelId === model.id;
+											const isBusy = isDownloading || isDeleting;
+											const modelProgress =
+												snapshot.modelProgressById[model.id];
+											const progressPercent =
+												typeof modelProgress?.progress === "number"
+													? Math.round(modelProgress.progress * 100)
+													: null;
+											const progressDownloaded = formatBytes(
+												modelProgress?.downloadedBytes,
+											);
+											const progressTotal = formatBytes(
+												modelProgress?.totalBytes,
+											);
+											const progressMessage = isDeleting
+												? "Removing model files..."
+												: modelProgress?.message ||
+													"Downloading and loading model...";
+											const progressLabel = isDeleting
+												? progressMessage
+												: progressPercent !== null &&
+														progressDownloaded &&
+														progressTotal
+													? `${progressMessage} ${progressPercent}% (${progressDownloaded} / ${progressTotal})`
+													: progressPercent !== null
+														? `${progressMessage} ${progressPercent}%`
+														: progressMessage;
+											const isConfirmingDelete =
+												confirmDeleteModelId === model.id;
+											const effectiveStatus = isDeleting
+												? "deleting"
+												: isDownloading
+													? "downloading"
+													: model.status;
 											const canDownload =
-												!isDownloading &&
+												!isUnsupported &&
+												!isBusy &&
 												model.status !== "installed" &&
-												runtime.isPreparingModelId === null;
+												runtime.isPreparingModelId === null &&
+												runtime.isDeletingModelId === null;
 											const canActivate =
+												!isUnsupported &&
 												model.status === "installed" &&
 												!isActive &&
-												runtime.isPreparingModelId === null;
+												!isDeleting &&
+												runtime.isPreparingModelId === null &&
+												runtime.isDeletingModelId === null;
+											const canDelete =
+												model.status === "installed" &&
+												!isDeleting &&
+												runtime.isPreparingModelId === null &&
+												runtime.isDeletingModelId === null;
 
 											return (
 												<li
@@ -359,17 +508,31 @@ function App() {
 													className={`model-item ${isActive ? "active" : ""}`}
 												>
 													<div className="model-main">
-														<div>
+														<div className="model-copy">
 															<p className="model-title">{model.label}</p>
 															<p className="model-subtitle">
-																{model.sizeLabel} • {model.notes}
+																{model.sizeLabel} • {model.languageLabel} •{" "}
+																{modelRuntimeLabel(model.runtime)}
 															</p>
+															<p className="model-notes">{model.notes}</p>
+															{model.hardwareReason ? (
+																<p className="model-hint">
+																	{model.hardwareReason}
+																</p>
+															) : null}
 														</div>
 														<div className="model-actions">
-															<span className={`model-badge ${model.status}`}>
-																{modelStatusLabel(
-																	isDownloading ? "downloading" : model.status,
-																)}
+															<span
+																className={`model-badge support ${
+																	model.hardwareSupport ?? "works_slow"
+																}`}
+															>
+																{hardwareSupportLabel(model.hardwareSupport)}
+															</span>
+															<span
+																className={`model-badge ${effectiveStatus}`}
+															>
+																{modelStatusLabel(effectiveStatus)}
 															</span>
 															<button
 																type="button"
@@ -382,7 +545,7 @@ function App() {
 																{isDownloading ? (
 																	<>
 																		<Loader2 className="h-4 w-4 animate-spin" />
-																		<span>Downloading</span>
+																		<span>Preparing</span>
 																	</>
 																) : model.status === "error" ? (
 																	"Retry"
@@ -400,11 +563,74 @@ function App() {
 															>
 																{isActive ? "Active" : "Use"}
 															</button>
+															<button
+																type="button"
+																className="quiet-button destructive"
+																disabled={!canDelete}
+																onClick={() =>
+																	setConfirmDeleteModelId(model.id)
+																}
+															>
+																Delete
+															</button>
 														</div>
 													</div>
-													{isDownloading ? (
-														<div className="model-progress" aria-live="polite">
-															<div className="model-progress-bar" />
+													{isConfirmingDelete ? (
+														<div
+															className="model-delete-confirm"
+															role="alert"
+															aria-live="polite"
+														>
+															<p className="model-delete-copy">
+																Delete model files from disk?
+															</p>
+															<div className="model-delete-actions">
+																<button
+																	type="button"
+																	className="quiet-button destructive"
+																	disabled={isDeleting}
+																	onClick={() => {
+																		setConfirmDeleteModelId(null);
+																		void runtime.deleteModel(model.id);
+																	}}
+																>
+																	Confirm delete
+																</button>
+																<button
+																	type="button"
+																	className="quiet-button"
+																	disabled={isDeleting}
+																	onClick={() => setConfirmDeleteModelId(null)}
+																>
+																	Cancel
+																</button>
+															</div>
+														</div>
+													) : null}
+													{isBusy ? (
+														<div
+															className="model-progress-row"
+															aria-live="polite"
+														>
+															<div className="model-progress">
+																<div
+																	className={`model-progress-bar ${
+																		progressPercent === null
+																			? "indeterminate"
+																			: "determinate"
+																	}`}
+																	style={
+																		progressPercent === null
+																			? undefined
+																			: {
+																					width: `${Math.max(progressPercent, 4)}%`,
+																				}
+																	}
+																/>
+															</div>
+															<p className="model-progress-label">
+																{progressLabel}
+															</p>
 														</div>
 													) : null}
 												</li>
@@ -419,6 +645,103 @@ function App() {
 							<div className="content-stack">
 								<section className="info-card">
 									<p className="sidebar-label">Behavior</p>
+									<div className="settings-group">
+										<p className="sidebar-label">ASR Acceleration</p>
+										<div className="segmented-control runtime-control">
+											{(
+												[
+													{ value: "auto", label: "Auto" },
+													{ value: "cpu", label: "CPU" },
+													{ value: "cuda", label: "CUDA" },
+												] as const
+											).map((option) => (
+												<button
+													type="button"
+													key={option.value}
+													className={
+														settings.accelerationMode === option.value
+															? "active"
+															: undefined
+													}
+													disabled={runtime.isUpdatingSettings}
+													onClick={() =>
+														void runtime.updateSetting({
+															accelerationMode: option.value,
+														})
+													}
+												>
+													<span>{option.label}</span>
+												</button>
+											))}
+										</div>
+										<p className="panel-note">
+											Mode {accelerationModeLabel(settings.accelerationMode)} •
+											Active runtime{" "}
+											{snapshot.hardware.asrRuntime.toUpperCase()}
+										</p>
+										{settings.accelerationMode === "cuda" &&
+										snapshot.hardware.asrRuntime !== "cuda" ? (
+											<div className="runtime-install-block">
+												<p className="panel-note warning">
+													{isCudaRuntimePending
+														? "CUDA mode requested. Verifying runtime..."
+														: "CUDA mode requested, but CUDA runtime is not active."}
+												</p>
+												{showCudaInstaller ? (
+													<button
+														type="button"
+														className="quiet-button runtime-install-button"
+														disabled={isInstallingCuda}
+														onClick={() =>
+															void runtime.installAccelerationRuntime("cuda")
+														}
+													>
+														{isInstallingCuda ? (
+															<>
+																<Loader2 className="h-4 w-4 animate-spin" />
+																<span>Installing CUDA runtime</span>
+															</>
+														) : (
+															"Install NVIDIA Acceleration"
+														)}
+													</button>
+												) : null}
+												{isInstallingCuda ? (
+													<div
+														className="model-progress-row"
+														aria-live="polite"
+													>
+														<div className="model-progress">
+															<div className="model-progress-bar indeterminate" />
+														</div>
+														<p className="model-progress-label">
+															Installing runtime and dependencies...
+														</p>
+													</div>
+												) : null}
+												{accelerationInstaller.message ? (
+													<p
+														className={`panel-note ${
+															accelerationInstaller.status === "error"
+																? "warning"
+																: ""
+														}`}
+													>
+														{accelerationInstaller.message}
+													</p>
+												) : isCudaRuntimePending ? (
+													<p className="panel-note">
+														Keeping CUDA selected while runtime verification
+														completes.
+													</p>
+												) : (
+													<p className="panel-note">
+														No terminal needed. Install directly here.
+													</p>
+												)}
+											</div>
+										) : null}
+									</div>
 									<label className="switch-row" htmlFor="auto-paste-toggle">
 										<span>Auto-paste transcription</span>
 										<input
@@ -452,7 +775,7 @@ function App() {
 				</div>
 			</main>
 
-			{runtime.latestToast ? <ToastBanner toast={runtime.latestToast} /> : null}
+			{toastToRender ? <ToastBanner toast={toastToRender} /> : null}
 		</div>
 	);
 }

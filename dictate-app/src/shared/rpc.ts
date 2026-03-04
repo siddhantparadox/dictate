@@ -27,6 +27,7 @@ export type JobStatus =
 export interface DictateSettings {
 	hotkey: string;
 	defaultModelId: ModelId;
+	accelerationMode: "auto" | "cpu" | "cuda";
 	autoPasteEnabled: boolean;
 	pasteRetryCount: number;
 	debugLogging: boolean;
@@ -53,6 +54,37 @@ export interface AppSnapshot {
 	};
 	settings: DictateSettings;
 	models: ModelCatalogItem[];
+	hardware: {
+		platform: "win32" | "darwin" | "linux" | "unknown";
+		cpuModel: string;
+		cpuCores: number;
+		totalRamGb: number;
+		gpuVendor: "nvidia" | "amd" | "intel" | "unknown" | "none";
+		gpuName: string | null;
+		gpuVramGb: number | null;
+		cudaAvailable: boolean;
+		asrRuntime: "cuda" | "cpu" | "unknown";
+	};
+	accelerationInstaller: {
+		status: "idle" | "installing" | "success" | "error";
+		mode: "cuda" | null;
+		message: string;
+		updatedAt: string;
+	};
+	modelProgressById: Partial<
+		Record<
+			ModelId,
+			{
+				operation: "download";
+				stage: "queued" | "downloading" | "loading" | "installed" | "error";
+				message: string;
+				progress: number | null;
+				downloadedBytes: number | null;
+				totalBytes: number | null;
+				updatedAt: string;
+			}
+		>
+	>;
 	sidecarStatus: "ready" | "starting" | "stopped" | "error";
 	lastJob: JobRecord | null;
 	recentJobs: JobRecord[];
@@ -83,6 +115,20 @@ export interface PrepareModelResult {
 	latencyMs: number;
 }
 
+export interface DeleteModelResult {
+	modelId: ModelId;
+	status: "deleted";
+	latencyMs: number;
+	removedPaths: string[];
+}
+
+export interface InstallAccelerationResult {
+	mode: "cuda";
+	status: "installed";
+	pythonBin: string;
+	runtime: "cuda" | "cpu" | "unknown";
+}
+
 export type DictateRPC = {
 	bun: RPCSchema<{
 		requests: {
@@ -105,6 +151,14 @@ export type DictateRPC = {
 			prepareModel: {
 				params: { modelId: ModelId };
 				response: PrepareModelResult;
+			};
+			deleteModel: {
+				params: { modelId: ModelId };
+				response: DeleteModelResult;
+			};
+			installAccelerationRuntime: {
+				params: { mode: "cuda" };
+				response: InstallAccelerationResult;
 			};
 			windowControl: {
 				params: {

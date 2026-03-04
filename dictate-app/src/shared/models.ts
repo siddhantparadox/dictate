@@ -9,9 +9,14 @@ export type CompatibilityTier =
 	| "available_with_constraints"
 	| "not_recommended";
 
+export type ModelRuntime = "cpu" | "nvidia_gpu";
+
+export type HardwareSupportStatus = "ready" | "works_slow" | "unsupported";
+
 export type ModelInstallStatus =
 	| "not_installed"
 	| "downloading"
+	| "deleting"
 	| "installed"
 	| "error";
 
@@ -20,9 +25,15 @@ export interface ModelCatalogItem {
 	label: string;
 	sizeLabel: string;
 	notes: string;
+	languageLabel: string;
+	runtime: ModelRuntime;
+	minSystemRamGb: number;
+	minVramGb?: number;
 	compatibility: CompatibilityTier;
 	installed: boolean;
 	status: ModelInstallStatus;
+	hardwareSupport?: HardwareSupportStatus;
+	hardwareReason?: string;
 }
 
 export const MODEL_CATALOG: ModelCatalogItem[] = [
@@ -30,7 +41,11 @@ export const MODEL_CATALOG: ModelCatalogItem[] = [
 		id: "nvidia/canary-qwen-2.5b",
 		label: "NVIDIA Canary-Qwen-2.5B",
 		sizeLabel: "5.12 GB",
-		notes: "High-accuracy English ASR, best on strong NVIDIA GPUs.",
+		notes: "High-accuracy English ASR for strong NVIDIA GPUs.",
+		languageLabel: "English",
+		runtime: "nvidia_gpu",
+		minSystemRamGb: 16,
+		minVramGb: 12,
 		compatibility: "available_with_constraints",
 		installed: false,
 		status: "not_installed",
@@ -39,7 +54,11 @@ export const MODEL_CATALOG: ModelCatalogItem[] = [
 		id: "nvidia/parakeet-tdt-0.6b-v3",
 		label: "NVIDIA Parakeet-TDT-0.6B-v3",
 		sizeLabel: "2.51 GB",
-		notes: "Multilingual model with strong accuracy, GPU-friendly.",
+		notes: "Multilingual model with strong accuracy on NVIDIA GPUs.",
+		languageLabel: "Multilingual",
+		runtime: "nvidia_gpu",
+		minSystemRamGb: 8,
+		minVramGb: 6,
 		compatibility: "available_with_constraints",
 		installed: false,
 		status: "not_installed",
@@ -49,6 +68,9 @@ export const MODEL_CATALOG: ModelCatalogItem[] = [
 		label: "Moonshine Medium Streaming",
 		sizeLabel: "1.06 GB",
 		notes: "Balanced quality and local runtime footprint.",
+		languageLabel: "English",
+		runtime: "cpu",
+		minSystemRamGb: 8,
 		compatibility: "recommended",
 		installed: false,
 		status: "not_installed",
@@ -58,6 +80,9 @@ export const MODEL_CATALOG: ModelCatalogItem[] = [
 		label: "Moonshine Tiny Streaming",
 		sizeLabel: "176 MB",
 		notes: "Fast fallback model for lower-end devices.",
+		languageLabel: "English",
+		runtime: "cpu",
+		minSystemRamGb: 4,
 		compatibility: "recommended",
 		installed: false,
 		status: "not_installed",

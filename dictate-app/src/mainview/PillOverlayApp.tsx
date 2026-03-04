@@ -19,6 +19,22 @@ function PillOverlayApp() {
 
 	useEffect(() => {
 		void rpcClient.logClientEvent("[pill-bootstrap] waiting for snapshot push");
+		let active = true;
+		void rpcClient
+			.getSnapshot()
+			.then((next) => {
+				if (!active) {
+					return;
+				}
+				setSnapshot(next);
+				void rpcClient.logClientEvent(
+					`[pill-bootstrap] initial snapshot loaded. state=${next.pill.state}`,
+				);
+			})
+			.catch((error) => {
+				void rpcClient.reportRendererError("pill.getSnapshot", error);
+			});
+
 		const offSnapshot = rpcClient.onSnapshot((next) => {
 			setSnapshot(next);
 			void rpcClient.logClientEvent(
@@ -26,6 +42,7 @@ function PillOverlayApp() {
 			);
 		});
 		return () => {
+			active = false;
 			offSnapshot();
 		};
 	}, []);

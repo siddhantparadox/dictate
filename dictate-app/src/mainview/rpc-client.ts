@@ -2,8 +2,10 @@ import { Electroview } from "electrobun/view";
 import type { ModelId } from "@/shared/models";
 import type {
 	AppSnapshot,
+	DeleteModelResult,
 	DictateRPC,
 	DictateSettings,
+	InstallAccelerationResult,
 	PrepareModelResult,
 	ToastPayload,
 	TranscriptionResult,
@@ -12,11 +14,13 @@ import type {
 type SnapshotListener = (snapshot: AppSnapshot) => void;
 type ToastListener = (toast: ToastPayload) => void;
 const REQUEST_TIMEOUT_MS = 2_500;
+const RPC_MAX_REQUEST_TIME_MS = 45 * 60_000;
 
 const snapshotListeners = new Set<SnapshotListener>();
 const toastListeners = new Set<ToastListener>();
 
 const rpc = Electroview.defineRPC<DictateRPC>({
+	maxRequestTime: RPC_MAX_REQUEST_TIME_MS,
 	handlers: {
 		requests: {
 			healthCheck: () => ({ ok: true, at: new Date().toISOString() }),
@@ -84,6 +88,12 @@ export const rpcClient = {
 		rpcProxy.request.runMicrophoneTranscription({ durationSeconds }),
 	prepareModel: (modelId: ModelId): Promise<PrepareModelResult> =>
 		rpcProxy.request.prepareModel({ modelId }),
+	deleteModel: (modelId: ModelId): Promise<DeleteModelResult> =>
+		rpcProxy.request.deleteModel({ modelId }),
+	installAccelerationRuntime: (
+		mode: "cuda",
+	): Promise<InstallAccelerationResult> =>
+		rpcProxy.request.installAccelerationRuntime({ mode }),
 	windowControl: (
 		action: "minimize" | "toggleMaximize" | "close" | "getState",
 	): Promise<{ maximized: boolean }> =>

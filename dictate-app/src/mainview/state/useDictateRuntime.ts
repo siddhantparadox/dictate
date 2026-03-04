@@ -11,6 +11,12 @@ interface RuntimeErrorState {
 	message: string;
 }
 
+function isRpcTimeoutError(error: unknown): boolean {
+	return (
+		error instanceof Error && error.message.includes("RPC request timed out")
+	);
+}
+
 export interface UseDictateRuntimeResult {
 	snapshot: AppSnapshot | null;
 	settings: AppSnapshot["settings"] | null;
@@ -19,10 +25,14 @@ export interface UseDictateRuntimeResult {
 	lastTranscript: string;
 	isDictating: boolean;
 	isPreparingModelId: ModelId | null;
+	isDeletingModelId: ModelId | null;
+	isUpdatingSettings: boolean;
 	isLoading: boolean;
 	runtimeError: RuntimeErrorState;
 	selectModel: (modelId: ModelId) => Promise<void>;
 	downloadModel: (modelId: ModelId) => Promise<boolean>;
+	deleteModel: (modelId: ModelId) => Promise<boolean>;
+	installAccelerationRuntime: (mode: "cuda") => Promise<boolean>;
 	startDictation: () => Promise<void>;
 	updateSetting: (
 		next: Partial<AppSnapshot["settings"]>,
@@ -40,6 +50,10 @@ export function useDictateRuntime(): UseDictateRuntimeResult {
 	const [isPreparingModelId, setIsPreparingModelId] = useState<ModelId | null>(
 		null,
 	);
+	const [isDeletingModelId, setIsDeletingModelId] = useState<ModelId | null>(
+		null,
+	);
+	const [isUpdatingSettings, setIsUpdatingSettings] = useState(false);
 
 	useEffect(() => {
 		let active = true;
@@ -106,10 +120,62 @@ export function useDictateRuntime(): UseDictateRuntimeResult {
 		};
 	}, []);
 
+	useEffect(() => {
+		if (!latestToast) {
+			return;
+		}
+		const timer = setTimeout(() => {
+			setLatestToast((current) => (current === latestToast ? null : current));
+		}, 3_200);
+		return () => clearTimeout(timer);
+	}, [latestToast]);
+
+	useEffect(() => {
+		if (!isPreparingModelId || !snapshot) {
+			return;
+		}
+
+		const model = snapshot.models.find(
+			(candidate) => candidate.id === isPreparingModelId,
+		);
+		if (!model) {
+			setIsPreparingModelId(null);
+			return;
+		}
+
+		if (model.status === "installed" || model.status === "error") {
+			setIsPreparingModelId(null);
+		}
+	}, [isPreparingModelId, snapshot]);
+
+	useEffect(() => {
+		if (!isDeletingModelId || !snapshot) {
+			return;
+		}
+
+		const model = snapshot.models.find(
+			(candidate) => candidate.id === isDeletingModelId,
+		);
+		if (!model) {
+			setIsDeletingModelId(null);
+			return;
+		}
+
+		if (model.status === "not_installed" || model.status === "error") {
+			setIsDeletingModelId(null);
+		}
+	}, [isDeletingModelId, snapshot]);
+
 	const settings = snapshot?.settings ?? null;
 	const models = snapshot?.models ?? [];
 	const lastTranscript = useMemo(() => {
 		const jobs = snapshot?.recentJobs ?? [];
+		for (const job of jobs) {
+			const transcript = job.transcript.trim();
+			if (job.status === "pasted" && transcript.length > 0) {
+				return transcript;
+			}
+		}
 		for (const job of jobs) {
 			const transcript = job.transcript.trim();
 			if (transcript.length > 0) {
@@ -131,11 +197,30 @@ export function useDictateRuntime(): UseDictateRuntimeResult {
 		async (
 			next: Partial<AppSnapshot["settings"]>,
 		): Promise<AppSnapshot["settings"]> => {
+			setIsUpdatingSettings(true);
+			setSnapshot((current) => {
+				if (!current) {
+					return current;
+				}
+				return {
+					...current,
+					settings: {
+						...current.settings,
+						...next,
+					},
+				};
+			});
 			try {
 				return await rpcClient.updateSettings(next);
 			} catch (error) {
 				void rpcClient.reportRendererError("updateSetting", error);
+				void rpcClient
+					.getSnapshot()
+					.then((fresh) => setSnapshot(fresh))
+					.catch(() => undefined);
 				throw error;
+			} finally {
+				setIsUpdatingSettings(false);
 			}
 		},
 		[],
@@ -146,12 +231,34 @@ export function useDictateRuntime(): UseDictateRuntimeResult {
 			setIsPreparingModelId(modelId);
 			try {
 				await rpcClient.prepareModel(modelId);
+				setIsPreparingModelId(null);
 				return true;
 			} catch (error) {
+				if (isRpcTimeoutError(error)) {
+					void rpcClient.logClientEvent(
+						`[downloadModel] RPC timeout for ${modelId}; waiting for snapshot status update.`,
+					);
+					return true;
+				}
 				void rpcClient.reportRendererError("downloadModel", error);
-				return false;
-			} finally {
 				setIsPreparingModelId(null);
+				return false;
+			}
+		},
+		[],
+	);
+
+	const deleteModel = useCallback(
+		async (modelId: ModelId): Promise<boolean> => {
+			setIsDeletingModelId(modelId);
+			try {
+				await rpcClient.deleteModel(modelId);
+				setIsDeletingModelId(null);
+				return true;
+			} catch (error) {
+				void rpcClient.reportRendererError("deleteModel", error);
+				setIsDeletingModelId(null);
+				return false;
 			}
 		},
 		[],
@@ -168,6 +275,19 @@ export function useDictateRuntime(): UseDictateRuntimeResult {
 		}
 	}, []);
 
+	const installAccelerationRuntime = useCallback(
+		async (mode: "cuda"): Promise<boolean> => {
+			try {
+				await rpcClient.installAccelerationRuntime(mode);
+				return true;
+			} catch (error) {
+				void rpcClient.reportRendererError("installAccelerationRuntime", error);
+				return false;
+			}
+		},
+		[],
+	);
+
 	return {
 		snapshot,
 		settings,
@@ -176,10 +296,14 @@ export function useDictateRuntime(): UseDictateRuntimeResult {
 		lastTranscript,
 		isDictating,
 		isPreparingModelId,
+		isDeletingModelId,
+		isUpdatingSettings,
 		isLoading: !snapshot || !settings,
 		runtimeError,
 		selectModel,
 		downloadModel,
+		deleteModel,
+		installAccelerationRuntime,
 		startDictation,
 		updateSetting,
 	};

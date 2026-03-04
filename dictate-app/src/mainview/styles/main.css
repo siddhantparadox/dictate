@@ -207,12 +207,30 @@
 	gap: 0.7rem;
 }
 
+.models-stack {
+	min-height: 0;
+	grid-template-rows: minmax(0, 1fr);
+	align-content: stretch;
+}
+
 .hero-card,
 .info-card {
 	border: 1px solid var(--glass-border);
 	border-radius: 0.95rem;
 	padding: 0.84rem;
 	background: var(--glass-chip);
+}
+
+.model-library-card {
+	height: 100%;
+	min-height: 0;
+	display: grid;
+	grid-template-rows: auto minmax(0, 1fr);
+	gap: 0.52rem;
+}
+
+.model-library-card .sidebar-label {
+	margin-bottom: 0;
 }
 
 .hero-card h1 {
@@ -330,6 +348,14 @@
 	gap: 0.52rem;
 }
 
+.model-library-card .model-list {
+	min-height: 0;
+	overflow-y: auto;
+	padding-right: 0.22rem;
+	scrollbar-gutter: stable;
+	align-content: start;
+}
+
 .model-item {
 	border: 1px solid var(--glass-border);
 	border-radius: 0.78rem;
@@ -345,7 +371,12 @@
 .model-main {
 	display: flex;
 	justify-content: space-between;
-	gap: 0.6rem;
+	gap: 0.7rem;
+	align-items: flex-start;
+}
+
+.model-copy {
+	min-width: 0;
 }
 
 .model-title {
@@ -364,9 +395,22 @@
 	overflow: hidden;
 }
 
+.model-notes {
+	margin: 0.24rem 0 0;
+	font-size: 0.73rem;
+	color: var(--text-secondary);
+}
+
+.model-hint {
+	margin: 0.26rem 0 0;
+	font-size: 0.7rem;
+	color: var(--text-secondary);
+}
+
 .model-actions {
-	display: flex;
-	align-items: center;
+	display: grid;
+	justify-items: end;
+	align-content: start;
 	gap: 0.32rem;
 	flex-shrink: 0;
 }
@@ -391,6 +435,12 @@
 	color: var(--info-text);
 }
 
+.model-badge.deleting {
+	background: hsl(30 83% 54% / 0.14);
+	border-color: hsl(30 83% 54% / 0.4);
+	color: hsl(30 83% 54%);
+}
+
 .model-badge.installed {
 	background: var(--ok-bg);
 	border-color: var(--ok-border);
@@ -398,6 +448,24 @@
 }
 
 .model-badge.error {
+	background: var(--error-bg);
+	border-color: var(--error-border);
+	color: var(--error-text);
+}
+
+.model-badge.support.ready {
+	background: var(--ok-bg);
+	border-color: var(--ok-border);
+	color: var(--ok-text);
+}
+
+.model-badge.support.works_slow {
+	background: var(--info-bg);
+	border-color: var(--info-border);
+	color: var(--info-text);
+}
+
+.model-badge.support.unsupported {
 	background: var(--error-bg);
 	border-color: var(--error-border);
 	color: var(--error-text);
@@ -422,8 +490,46 @@
 	cursor: not-allowed;
 }
 
+.quiet-button.destructive {
+	border-color: hsl(0 84% 62% / 0.5);
+	color: hsl(0 84% 68%);
+}
+
+.quiet-button.destructive:disabled {
+	color: hsl(0 44% 72%);
+}
+
+.model-progress-row {
+	width: 100%;
+	display: grid;
+	gap: 0.24rem;
+	margin-top: 0.4rem;
+}
+
+.model-delete-confirm {
+	margin-top: 0.4rem;
+	padding: 0.46rem 0.56rem;
+	border-radius: 0.64rem;
+	border: 1px solid hsl(0 84% 62% / 0.32);
+	background: hsl(0 84% 62% / 0.08);
+	display: grid;
+	gap: 0.36rem;
+}
+
+.model-delete-copy {
+	margin: 0;
+	font-size: 0.7rem;
+	color: hsl(0 84% 72%);
+}
+
+.model-delete-actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.34rem;
+}
+
 .model-progress {
-	margin-top: 0.45rem;
+	margin-top: 0.16rem;
 	height: 7px;
 	border-radius: 999px;
 	overflow: hidden;
@@ -431,11 +537,26 @@
 	background: var(--surface-muted);
 }
 
+.model-progress-label {
+	margin: 0;
+	font-size: 0.66rem;
+	color: var(--text-secondary);
+}
+
 .model-progress-bar {
-	width: 42%;
+	width: 0%;
 	height: 100%;
 	border-radius: 999px;
 	background: linear-gradient(90deg, hsl(205 92% 66%), hsl(222 86% 61%));
+}
+
+.model-progress-bar.determinate {
+	animation: none;
+	transition: width 180ms linear;
+}
+
+.model-progress-bar.indeterminate {
+	width: 42%;
 	animation: progress-slide 1200ms ease-in-out infinite;
 }
 
@@ -447,6 +568,25 @@
 	font-size: 0.82rem;
 	color: var(--text-primary);
 	margin-top: 0.56rem;
+}
+
+.settings-group {
+	display: grid;
+	gap: 0.4rem;
+}
+
+.runtime-control {
+	margin-bottom: 0.08rem;
+}
+
+.runtime-install-block {
+	display: grid;
+	gap: 0.34rem;
+	margin-top: 0.18rem;
+}
+
+.runtime-install-button {
+	justify-self: start;
 }
 
 .switch-row input[type="checkbox"] {
@@ -580,6 +720,10 @@
 	color: var(--text-secondary);
 }
 
+.panel-note.warning {
+	color: var(--error-text);
+}
+
 .loading-chip {
 	display: inline-flex;
 	align-items: center;
@@ -635,6 +779,10 @@ kbd {
 	}
 
 	.model-actions {
-		flex-wrap: wrap;
+		justify-items: start;
+	}
+
+	.model-progress-row {
+		max-width: 280px;
 	}
 }

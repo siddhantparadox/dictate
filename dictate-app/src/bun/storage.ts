@@ -17,6 +17,7 @@ const CURRENT_DEFAULT_HOTKEY = "Ctrl+Shift";
 const DEFAULT_SETTINGS: DictateSettings = {
 	hotkey: CURRENT_DEFAULT_HOTKEY,
 	defaultModelId: DEFAULT_MODEL_ID,
+	accelerationMode: "auto",
 	autoPasteEnabled: true,
 	pasteRetryCount: 1,
 	debugLogging: false,
@@ -95,11 +96,18 @@ export class DictateStorage {
 		} else {
 			try {
 				const parsed = JSON.parse(existingSettings.value) as DictateSettings;
-				if (parsed.hotkey === LEGACY_DEFAULT_HOTKEY) {
-					parsed.hotkey = CURRENT_DEFAULT_HOTKEY;
+				const merged = {
+					...DEFAULT_SETTINGS,
+					...parsed,
+					hotkey:
+						parsed.hotkey === LEGACY_DEFAULT_HOTKEY
+							? CURRENT_DEFAULT_HOTKEY
+							: parsed.hotkey,
+				};
+				if (JSON.stringify(merged) !== existingSettings.value) {
 					this.db
 						.query("UPDATE settings SET value = ? WHERE key = ?")
-						.run(JSON.stringify(parsed), SETTINGS_KEY);
+						.run(JSON.stringify(merged), SETTINGS_KEY);
 				}
 			} catch {
 				this.db
