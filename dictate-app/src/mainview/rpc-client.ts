@@ -6,17 +6,20 @@ import type {
 	DictateRPC,
 	DictateSettings,
 	InstallAccelerationResult,
+	PillFramePayload,
 	PrepareModelResult,
 	ToastPayload,
 	TranscriptionResult,
 } from "@/shared/rpc";
 
 type SnapshotListener = (snapshot: AppSnapshot) => void;
+type PillFrameListener = (payload: PillFramePayload) => void;
 type ToastListener = (toast: ToastPayload) => void;
 const REQUEST_TIMEOUT_MS = 2_500;
 const RPC_MAX_REQUEST_TIME_MS = 45 * 60_000;
 
 const snapshotListeners = new Set<SnapshotListener>();
+const pillFrameListeners = new Set<PillFrameListener>();
 const toastListeners = new Set<ToastListener>();
 
 const rpc = Electroview.defineRPC<DictateRPC>({
@@ -29,6 +32,11 @@ const rpc = Electroview.defineRPC<DictateRPC>({
 			snapshotUpdated: (snapshot) => {
 				for (const listener of snapshotListeners) {
 					listener(snapshot);
+				}
+			},
+			pillFrameUpdated: (payload) => {
+				for (const listener of pillFrameListeners) {
+					listener(payload);
 				}
 			},
 			toast: (toast) => {
@@ -122,6 +130,10 @@ export const rpcClient = {
 	onSnapshot: (listener: SnapshotListener): (() => void) => {
 		snapshotListeners.add(listener);
 		return () => snapshotListeners.delete(listener);
+	},
+	onPillFrame: (listener: PillFrameListener): (() => void) => {
+		pillFrameListeners.add(listener);
+		return () => pillFrameListeners.delete(listener);
 	},
 	onToast: (listener: ToastListener): (() => void) => {
 		toastListeners.add(listener);

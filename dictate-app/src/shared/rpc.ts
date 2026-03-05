@@ -49,7 +49,6 @@ export interface AppSnapshot {
 	pill: {
 		state: RecordingPillState;
 		durationMs: number;
-		waveformBars: number[];
 		visible: boolean;
 	};
 	settings: DictateSettings;
@@ -88,6 +87,14 @@ export interface AppSnapshot {
 	sidecarStatus: "ready" | "starting" | "stopped" | "error";
 	lastJob: JobRecord | null;
 	recentJobs: JobRecord[];
+}
+
+export interface PillFramePayload {
+	state: RecordingPillState;
+	visible: boolean;
+	durationMs: number;
+	level: number;
+	atMs: number;
 }
 
 export interface PasteOutcome {
@@ -177,6 +184,7 @@ export type DictateRPC = {
 		};
 		messages: {
 			snapshotUpdated: AppSnapshot;
+			pillFrameUpdated: PillFramePayload;
 			toast: ToastPayload;
 		};
 	}>;

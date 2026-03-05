@@ -71,17 +71,15 @@
 	color: var(--text-primary);
 }
 
-.pill-wave {
+.pill-waveform {
+	min-width: 12.25rem;
+	width: 12.25rem;
 	display: inline-flex;
-	align-items: end;
-	gap: 0.18rem;
-	height: 24px;
+	align-items: center;
 }
 
-.pill-wave-bar {
-	width: 0.2rem;
-	border-radius: 999px;
-	background: linear-gradient(180deg, hsl(205 90% 67%), hsl(223 82% 58%));
+.pill-waveform-canvas {
+	width: 100%;
 }
 
 .pill-time {

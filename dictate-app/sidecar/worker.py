@@ -20,15 +20,22 @@ CANARY_MODEL = "nvidia/canary-qwen-2.5b"
 SUPPORTED_MODELS = {PARAKEET_MODEL, CANARY_MODEL, *MOONSHINE_MODELS}
 MAX_LIVE_CAPTURE_SECONDS = 45.0
 PREPARE_PROGRESS_EVENT = "prepare_model_progress"
+MICROPHONE_LEVEL_EVENT = "microphone_level"
 DOWNLOAD_PROGRESS_POLL_SECONDS = 0.35
+MIC_LEVEL_EMIT_INTERVAL_SECONDS = 0.025
+MIC_LEVEL_NOISE_FLOOR = 0.015
+MIC_LEVEL_GAIN = 18.0
+MIC_LEVEL_CURVE = 0.65
 
 _moonshine_cache: ModelCache = {}
 _nemo_cache: ModelCache = {}
+_stdout_lock = threading.Lock()
 
 
 def write_response(payload: dict[str, Any]) -> None:
-    sys.stdout.write(json.dumps(payload) + "\n")
-    sys.stdout.flush()
+    with _stdout_lock:
+        sys.stdout.write(json.dumps(payload) + "\n")
+        sys.stdout.flush()
 
 
 def response_ok(request_id: str, result: dict[str, Any]) -> None:
@@ -139,6 +146,17 @@ def _emit_prepare_model_progress(
     )
 
 
+def _emit_microphone_level(level: float) -> None:
+    safe_level = max(0.0, min(1.0, float(level)))
+    write_response(
+        {
+            "event": MICROPHONE_LEVEL_EVENT,
+            "level": safe_level,
+            "at_ms": int(time.time() * 1000),
+        }
+    )
+
+
 def _extract_text(result: Any) -> str:
     if result is None:
         return ""
@@ -180,6 +198,8 @@ class MicrophoneCaptureSession:
         self._captured_frames = 0
         self._lock = threading.Lock()
         self._started_at = 0.0
+        self._latest_level = 0.0
+        self._last_level_emit_at = 0.0
 
     def is_active(self) -> bool:
         return self._stream is not None
@@ -194,10 +214,17 @@ class MicrophoneCaptureSession:
             raise RuntimeError(
                 "Microphone capture dependencies missing. Install sidecar requirements."
             ) from exc
+        try:
+            import numpy as np
+        except Exception as exc:  # noqa: BLE001
+            raise RuntimeError("NumPy runtime missing. Install sidecar requirements.") from exc
 
         self._frames = []
         self._captured_frames = 0
         self._started_at = time.perf_counter()
+        self._latest_level = 0.0
+        self._last_level_emit_at = 0.0
+        _emit_microphone_level(0.0)
 
         def on_audio(indata, frames, _callback_time, status):
             with self._lock:
@@ -208,6 +235,22 @@ class MicrophoneCaptureSession:
                 chunk = indata[:remaining, :1].copy()
                 self._frames.append(chunk)
                 self._captured_frames += int(chunk.shape[0])
+
+                chunk_size = int(chunk.shape[0])
+                if chunk_size <= 0:
+                    return
+
+                rms = float(np.sqrt(np.mean(np.square(chunk[:, 0], dtype=np.float64))))
+                linear = max(0.0, min(1.0, rms * MIC_LEVEL_GAIN))
+                normalized = linear**MIC_LEVEL_CURVE
+                if normalized < MIC_LEVEL_NOISE_FLOOR:
+                    normalized = 0.0
+
+                self._latest_level = normalized
+                now = time.perf_counter()
+                if now - self._last_level_emit_at >= MIC_LEVEL_EMIT_INTERVAL_SECONDS:
+                    self._last_level_emit_at = now
+                    _emit_microphone_level(self._latest_level)
 
         self._stream = sd.InputStream(
             samplerate=self.sample_rate,
@@ -227,6 +270,7 @@ class MicrophoneCaptureSession:
             stream.stop()
         finally:
             stream.close()
+        _emit_microphone_level(0.0)
 
         try:
             import numpy as np
@@ -727,3 +771,5 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+

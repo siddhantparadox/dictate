@@ -21,6 +21,7 @@ import type {
 	DictateSettings,
 	InstallAccelerationResult,
 	JobRecord,
+	PillFramePayload,
 	PrepareModelResult,
 	RecordingPillState,
 	ToastPayload,
@@ -43,6 +44,15 @@ const PILL_WINDOW_WIDTH = 460;
 const PILL_WINDOW_HEIGHT = 72;
 const PILL_WINDOW_BOTTOM_MARGIN = 22;
 const PILL_HIDE_DELAY_MS = 1300;
+const PILL_FRAME_INTERVAL_MS = 33;
+const MIC_LEVEL_STALE_MS = 180;
+const MIC_LEVEL_VISUAL_GAIN = 1.6;
+const MIC_LEVEL_VISUAL_CURVE = 0.72;
+const MIC_LEVEL_AGC_FLOOR = 0.06;
+const MIC_LEVEL_AGC_DECAY = 0.985;
+const MIC_LEVEL_AGC_HEADROOM = 0.92;
+const MIC_LEVEL_ATTACK_ALPHA = 0.64;
+const MIC_LEVEL_RELEASE_ALPHA = 0.24;
 const MODIFIER_HOTKEY_POLL_MS = 30;
 const MODIFIER_HOTKEY_REARM_MS = 120;
 const CUDA_PROBE_TIMEOUT_MS = 6_000;
@@ -59,6 +69,7 @@ const VK_RSHIFT = 0xa1;
 type WindowRpc = {
 	send: {
 		snapshotUpdated: (payload: AppSnapshot) => Promise<void> | void;
+		pillFrameUpdated: (payload: PillFramePayload) => Promise<void> | void;
 		toast: (payload: ToastPayload) => Promise<void> | void;
 	};
 };
@@ -434,6 +445,10 @@ const sidecar = new SidecarClient(
 			setModelProgress(event.modelId, nextProgress);
 			scheduleModelProgressBroadcast();
 		},
+		onMicrophoneLevel: ({ level, atMs }) => {
+			liveMicLevel = Math.max(0, Math.min(1, level));
+			lastMicLevelAt = atMs > 0 ? atMs : Date.now();
+		},
 	},
 );
 
@@ -444,6 +459,10 @@ let shuttingDown = false;
 let hidePillTimer: ReturnType<typeof setTimeout> | null = null;
 let recordingTicker: ReturnType<typeof setInterval> | null = null;
 let recordingStartedAt = 0;
+let liveMicLevel = 0;
+let smoothedMicLevel = 0;
+let adaptiveMicPeak = MIC_LEVEL_AGC_FLOOR;
+let lastMicLevelAt = 0;
 let modifierHotkeyTimer: ReturnType<typeof setInterval> | null = null;
 let modifierHotkeyWasDown = false;
 let lastModifierHotkeyAt = 0;
@@ -460,7 +479,6 @@ let getAsyncKeyStateFn: ((virtualKey: number) => number) | null = null;
 let currentPill: AppSnapshot["pill"] = {
 	state: "hidden",
 	durationMs: 0,
-	waveformBars: [12, 25, 8, 30, 14, 28, 10, 20, 16],
 	visible: false,
 };
 
@@ -921,11 +939,34 @@ function startModifierHotkeyPolling(): boolean {
 	return true;
 }
 
-function createWaveformBars(count = 9): number[] {
-	return Array.from({ length: count }, (_, index) => {
-		const seed = Date.now() + index * 43;
-		return 6 + Math.floor(Math.abs(Math.sin(seed * 0.0085)) * 28);
-	});
+function clampLevel(value: number): number {
+	if (!Number.isFinite(value)) {
+		return 0;
+	}
+	if (value <= 0) {
+		return 0;
+	}
+	if (value >= 1) {
+		return 1;
+	}
+	return value;
+}
+
+function resetMicLevelState(): void {
+	liveMicLevel = 0;
+	smoothedMicLevel = 0;
+	adaptiveMicPeak = MIC_LEVEL_AGC_FLOOR;
+	lastMicLevelAt = 0;
+}
+
+function createPillFrame(level: number, atMs: number): PillFramePayload {
+	return {
+		state: currentPill.state,
+		visible: currentPill.visible,
+		durationMs: currentPill.durationMs,
+		level: clampLevel(level),
+		atMs,
+	};
 }
 
 async function getMainViewUrl(): Promise<string> {
@@ -1012,6 +1053,19 @@ async function broadcastSnapshot(options?: {
 	});
 }
 
+async function sendPillFrame(level: number, atMs = Date.now()): Promise<void> {
+	const rpc = getWindowRpc(pillWindow);
+	if (!rpc) {
+		return;
+	}
+	const frame = createPillFrame(level, atMs);
+	try {
+		await Promise.resolve(rpc.send.pillFrameUpdated(frame));
+	} catch (error) {
+		console.error("[pill-frame] push failed:", error);
+	}
+}
+
 async function sendToast(payload: ToastPayload): Promise<void> {
 	if (payload.type === "error" || payload.type === "warning") {
 		Utils.showNotification({
@@ -1079,6 +1133,36 @@ function stopRecordingTicker(): void {
 	}
 	clearInterval(recordingTicker);
 	recordingTicker = null;
+	resetMicLevelState();
+}
+
+function getSmoothedMicLevel(now: number): number {
+	const hasRecentLevel =
+		lastMicLevelAt > 0 && now - lastMicLevelAt <= MIC_LEVEL_STALE_MS;
+	const target = hasRecentLevel ? liveMicLevel : 0;
+	adaptiveMicPeak = Math.max(
+		MIC_LEVEL_AGC_FLOOR,
+		target,
+		adaptiveMicPeak * MIC_LEVEL_AGC_DECAY,
+	);
+	const agcTarget =
+		target <= 0
+			? 0
+			: clampLevel((target / adaptiveMicPeak) * MIC_LEVEL_AGC_HEADROOM);
+	const boostedTarget = clampLevel(
+		agcTarget ** MIC_LEVEL_VISUAL_CURVE * MIC_LEVEL_VISUAL_GAIN,
+	);
+	const alpha =
+		boostedTarget >= smoothedMicLevel
+			? MIC_LEVEL_ATTACK_ALPHA
+			: MIC_LEVEL_RELEASE_ALPHA;
+	smoothedMicLevel = clampLevel(
+		smoothedMicLevel + (boostedTarget - smoothedMicLevel) * alpha,
+	);
+	if (smoothedMicLevel < 0.001) {
+		smoothedMicLevel = 0;
+	}
+	return smoothedMicLevel;
 }
 
 async function updatePill(
@@ -1096,6 +1180,7 @@ async function updatePill(
 		hidePillWindow();
 	}
 	await broadcastSnapshot({ target: options?.target ?? "all" });
+	await sendPillFrame(currentPill.state === "recording" ? smoothedMicLevel : 0);
 }
 
 async function setPillState(next: RecordingPillState): Promise<void> {
@@ -1115,35 +1200,32 @@ function schedulePillHide(): void {
 			state: "hidden",
 			visible: false,
 			durationMs: 0,
-			waveformBars: createWaveformBars(),
 		});
 	}, PILL_HIDE_DELAY_MS);
 }
 
 function startRecordingPill(): void {
 	stopRecordingTicker();
+	resetMicLevelState();
 	recordingStartedAt = Date.now();
 	void updatePill({
 		state: "recording",
 		visible: true,
 		durationMs: 0,
-		waveformBars: createWaveformBars(),
 	});
 
 	recordingTicker = setInterval(() => {
-		const durationMs = Date.now() - recordingStartedAt;
-		void updatePill(
-			{
-				state: "recording",
-				visible: true,
-				durationMs,
-				waveformBars: createWaveformBars(),
-			},
-			{
-				target: "pill",
-			},
-		);
-	}, 120);
+		if (currentPill.state !== "recording" || !currentPill.visible) {
+			return;
+		}
+		const now = Date.now();
+		const durationMs = now - recordingStartedAt;
+		currentPill = {
+			...currentPill,
+			durationMs,
+		};
+		void sendPillFrame(getSmoothedMicLevel(now), now);
+	}, PILL_FRAME_INTERVAL_MS);
 }
 
 async function setTranscribingPill(): Promise<void> {
@@ -1200,6 +1282,7 @@ async function completeTranscription(
 	job: JobRecord,
 	sidecarResult: { text: string; latencyMs: number },
 ): Promise<TranscriptionResult> {
+	stopRecordingTicker();
 	const settings = storage.getSettings();
 	const paste = settings.autoPasteEnabled
 		? await autoPasteText(sidecarResult.text, settings.pasteRetryCount)

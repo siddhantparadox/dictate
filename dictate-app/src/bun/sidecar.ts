@@ -52,6 +52,12 @@ interface SidecarPrepareModelProgressEvent {
 	total_bytes?: number | null;
 }
 
+interface SidecarMicrophoneLevelEvent {
+	event: "microphone_level";
+	level?: number;
+	at_ms?: number;
+}
+
 interface SidecarClientOptions {
 	onPrepareModelProgress?: (event: {
 		modelId: ModelId;
@@ -61,6 +67,7 @@ interface SidecarClientOptions {
 		downloadedBytes: number | null;
 		totalBytes: number | null;
 	}) => void;
+	onMicrophoneLevel?: (event: { level: number; atMs: number }) => void;
 }
 
 function isModelId(value: string): value is ModelId {
@@ -83,6 +90,29 @@ function normalizeProgress(value: unknown): number | null {
 		return 1;
 	}
 	return value;
+}
+
+function normalizeLevel(value: unknown): number {
+	if (typeof value !== "number" || !Number.isFinite(value)) {
+		return 0;
+	}
+	if (value <= 0) {
+		return 0;
+	}
+	if (value >= 1) {
+		return 1;
+	}
+	return value;
+}
+
+function normalizeEpochMs(value: unknown): number {
+	if (typeof value !== "number" || !Number.isFinite(value)) {
+		return Date.now();
+	}
+	if (value <= 0) {
+		return Date.now();
+	}
+	return Math.floor(value);
 }
 
 function normalizeBytes(value: unknown): number | null {
@@ -231,6 +261,20 @@ export class SidecarClient {
 				progress: normalizeProgress(event.progress),
 				downloadedBytes: normalizeBytes(event.downloaded_bytes),
 				totalBytes: normalizeBytes(event.total_bytes),
+			});
+			return;
+		}
+
+		if (
+			typeof parsed === "object" &&
+			parsed !== null &&
+			"event" in parsed &&
+			(parsed as { event?: unknown }).event === "microphone_level"
+		) {
+			const event = parsed as SidecarMicrophoneLevelEvent;
+			this.options.onMicrophoneLevel?.({
+				level: normalizeLevel(event.level),
+				atMs: normalizeEpochMs(event.at_ms),
 			});
 			return;
 		}

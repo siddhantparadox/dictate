@@ -1,9 +1,10 @@
 import { CheckCircle2, Loader2, Mic, TriangleAlert } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import type { AppSnapshot } from "@/shared/rpc";
+import { Waveform } from "@/components/ui/waveform";
+import type { AppSnapshot, PillFramePayload } from "@/shared/rpc";
 import { rpcClient } from "./rpc-client";
 
-const BAR_IDS = ["bar-a", "bar-b", "bar-c", "bar-d", "bar-e", "bar-f", "bar-g"];
+const LEVEL_HISTORY_SIZE = 24;
 
 function formatDuration(ms: number): string {
 	const total = Math.max(0, Math.floor(ms / 1000));
@@ -14,8 +15,33 @@ function formatDuration(ms: number): string {
 	return `${minutes}:${seconds}`;
 }
 
+function createEmptyHistory(): number[] {
+	return Array.from({ length: LEVEL_HISTORY_SIZE }, () => 0);
+}
+
+function appendLevelHistory(history: number[], level: number): number[] {
+	const safeLevel = Number.isFinite(level)
+		? Math.max(0, Math.min(1, level))
+		: 0;
+	const gatedLevel = safeLevel < 0.01 ? 0 : safeLevel;
+	return [gatedLevel, ...history].slice(0, LEVEL_HISTORY_SIZE);
+}
+
+function buildCenteredWaveformData(history: number[]): number[] {
+	const shaped = history.map((value, index) => {
+		const decay = Math.exp(-index * 0.18);
+		return Math.max(0, Math.min(1, value * decay));
+	});
+	const mirrored = [...shaped].reverse();
+	return [...mirrored, ...shaped];
+}
+
 function PillOverlayApp() {
 	const [snapshot, setSnapshot] = useState<AppSnapshot | null>(null);
+	const [pillFrame, setPillFrame] = useState<PillFramePayload | null>(null);
+	const [levelHistory, setLevelHistory] = useState<number[]>(() =>
+		createEmptyHistory(),
+	);
 
 	useEffect(() => {
 		void rpcClient.logClientEvent("[pill-bootstrap] waiting for snapshot push");
@@ -41,22 +67,32 @@ function PillOverlayApp() {
 				`[pill-bootstrap] snapshot push received. state=${next.pill.state}`,
 			);
 		});
+
+		const offPillFrame = rpcClient.onPillFrame((payload) => {
+			setPillFrame(payload);
+			if (payload.state === "recording" && payload.visible) {
+				setLevelHistory((previous) =>
+					appendLevelHistory(previous, payload.level),
+				);
+				return;
+			}
+			setLevelHistory(createEmptyHistory());
+		});
+
 		return () => {
 			active = false;
 			offSnapshot();
+			offPillFrame();
 		};
 	}, []);
 
-	const pill = snapshot?.pill;
-	const state = pill?.state ?? "hidden";
-	const isVisible = pill?.visible ?? false;
-	const waveformBars = useMemo(() => {
-		const source = pill?.waveformBars.length
-			? pill.waveformBars
-			: [12, 22, 10, 26, 15, 20, 12];
-		const fallback = source[source.length - 1] ?? 12;
-		return BAR_IDS.map((_, position) => source[position] ?? fallback);
-	}, [pill?.waveformBars]);
+	const state = pillFrame?.state ?? snapshot?.pill.state ?? "hidden";
+	const isVisible = pillFrame?.visible ?? snapshot?.pill.visible ?? false;
+	const durationMs = pillFrame?.durationMs ?? snapshot?.pill.durationMs ?? 0;
+	const waveformData = useMemo(
+		() => buildCenteredWaveformData(levelHistory),
+		[levelHistory],
+	);
 
 	if (!isVisible || state === "hidden") {
 		return <div className="pill-root hidden" />;
@@ -71,18 +107,20 @@ function PillOverlayApp() {
 							<span className="pill-dot" />
 							<strong>Listening</strong>
 						</div>
-						<div className="pill-wave">
-							{BAR_IDS.map((barId, position) => (
-								<span
-									key={barId}
-									className="pill-wave-bar"
-									style={{ height: `${waveformBars[position] ?? 12}px` }}
-								/>
-							))}
+						<div className="pill-waveform">
+							<Waveform
+								barColor="hsl(var(--primary))"
+								barGap={1}
+								barHeight={3}
+								barRadius={999}
+								barWidth={3}
+								className="pill-waveform-canvas"
+								data={waveformData}
+								fadeEdges={false}
+								height={24}
+							/>
 						</div>
-						<span className="pill-time">
-							{formatDuration(pill?.durationMs ?? 0)}
-						</span>
+						<span className="pill-time">{formatDuration(durationMs)}</span>
 						<div className="pill-symbol">
 							<Mic className="h-4 w-4" />
 						</div>
