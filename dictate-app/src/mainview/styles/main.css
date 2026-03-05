@@ -333,11 +333,67 @@
 	background: var(--info-bg);
 }
 
+.status-pill.warning {
+	color: hsl(32 82% 58%);
+	border-color: hsl(32 82% 58% / 0.46);
+	background: hsl(32 82% 58% / 0.12);
+}
+
 .status-pill.error,
 .status-pill.stopped {
 	color: var(--error-text);
 	border-color: var(--error-border);
 	background: var(--error-bg);
+}
+
+.engine-status-row {
+	display: grid;
+	gap: 0.45rem;
+}
+
+.engine-status-detail {
+	margin: 0;
+	font-size: 0.78rem;
+	color: var(--text-primary);
+}
+
+.overview-messages-block + .overview-messages-block {
+	margin-top: 0.66rem;
+}
+
+.overview-message-heading {
+	margin: 0;
+	font-size: 0.72rem;
+	font-weight: 640;
+	color: var(--text-secondary);
+}
+
+.overview-message-list {
+	list-style: none;
+	margin: 0.36rem 0 0;
+	padding: 0;
+	display: grid;
+	gap: 0.32rem;
+}
+
+.overview-message-list li,
+.overview-message-clear {
+	margin: 0;
+	font-size: 0.76rem;
+	line-height: 1.35;
+}
+
+.overview-message-list.warnings li {
+	color: var(--error-text);
+}
+
+.overview-message-list.tips li {
+	color: var(--text-primary);
+}
+
+.overview-message-clear {
+	margin-top: 0.36rem;
+	color: var(--text-secondary);
 }
 
 .model-list {
@@ -433,6 +489,12 @@
 	background: var(--info-bg);
 	border-color: var(--info-border);
 	color: var(--info-text);
+}
+
+.model-badge.loading {
+	background: hsl(32 82% 58% / 0.14);
+	border-color: hsl(32 82% 58% / 0.4);
+	color: hsl(32 82% 58%);
 }
 
 .model-badge.deleting {
@@ -540,6 +602,7 @@
 .model-progress-label {
 	margin: 0;
 	font-size: 0.66rem;
+	line-height: 1.35;
 	color: var(--text-secondary);
 }
 

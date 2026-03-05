@@ -22,6 +22,7 @@ MAX_LIVE_CAPTURE_SECONDS = 45.0
 PREPARE_PROGRESS_EVENT = "prepare_model_progress"
 MICROPHONE_LEVEL_EVENT = "microphone_level"
 DOWNLOAD_PROGRESS_POLL_SECONDS = 0.35
+PREPARE_LOADING_STALE_POLLS = 4
 MIC_LEVEL_EMIT_INTERVAL_SECONDS = 0.025
 MIC_LEVEL_NOISE_FLOOR = 0.015
 MIC_LEVEL_GAIN = 18.0
@@ -660,15 +661,32 @@ def handle_prepare_model(request_id: str, params: dict[str, Any]) -> None:
 
     def monitor_download_progress() -> None:
         last_downloaded = -1
+        stale_polls = 0
+        loading_announced = False
         while not stop_event.wait(DOWNLOAD_PROGRESS_POLL_SECONDS):
             downloaded = _directory_size(repo_dir)
-            if downloaded == last_downloaded:
+            if downloaded != last_downloaded:
+                last_downloaded = downloaded
+                stale_polls = 0
+                loading_announced = False
+                _emit_prepare_model_progress(
+                    model_id,
+                    "downloading",
+                    "Downloading model files...",
+                    downloaded_bytes=downloaded,
+                    total_bytes=total_bytes,
+                )
                 continue
-            last_downloaded = downloaded
+
+            stale_polls += 1
+            if loading_announced or stale_polls < PREPARE_LOADING_STALE_POLLS:
+                continue
+
+            loading_announced = True
             _emit_prepare_model_progress(
                 model_id,
-                "downloading",
-                "Downloading model files...",
+                "loading",
+                "Loading model runtime...",
                 downloaded_bytes=downloaded,
                 total_bytes=total_bytes,
             )
@@ -771,5 +789,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
 

@@ -22,24 +22,24 @@ import {
 	getThemePreference,
 	type ThemePreference,
 } from "@/mainview/theme";
-import type { ModelId } from "@/shared/models";
+import type { ModelCatalogItem, ModelId } from "@/shared/models";
+import type { AppSnapshot } from "@/shared/rpc";
 
 type MainSection = "overview" | "history" | "models" | "settings";
+type EngineStatusKind = "ready" | "starting" | "warning" | "error";
+type ModelDisplayStatus =
+	| "not_installed"
+	| "queued"
+	| "downloading"
+	| "loading"
+	| "switching"
+	| "deleting"
+	| "installed"
+	| "error";
 
-function statusLabel(
-	status: "ready" | "starting" | "stopped" | "error",
-): string {
-	switch (status) {
-		case "ready":
-			return "Ready";
-		case "starting":
-			return "Starting";
-		case "error":
-			return "Error";
-		default:
-			return "Stopped";
-	}
-}
+type ModelProgressEntry = NonNullable<
+	AppSnapshot["modelProgressById"][ModelId]
+>;
 
 function pillLabel(
 	state: "hidden" | "recording" | "transcribing" | "success" | "failure",
@@ -59,19 +59,45 @@ function pillLabel(
 }
 
 function modelStatusLabel(
-	status: "not_installed" | "downloading" | "deleting" | "installed" | "error",
+	status: ModelDisplayStatus,
+	isActive: boolean,
 ): string {
 	switch (status) {
+		case "queued":
+			return "Queued";
 		case "downloading":
 			return "Downloading";
+		case "loading":
+			return "Loading";
+		case "switching":
+			return "Switching";
 		case "deleting":
 			return "Removing";
 		case "installed":
-			return "Installed";
+			return isActive ? "Active" : "Installed";
 		case "error":
 			return "Download failed";
 		default:
 			return "Not installed";
+	}
+}
+
+function modelStatusClass(status: ModelDisplayStatus): string {
+	switch (status) {
+		case "queued":
+		case "downloading":
+			return "downloading";
+		case "loading":
+		case "switching":
+			return "loading";
+		case "deleting":
+			return "deleting";
+		case "installed":
+			return "installed";
+		case "error":
+			return "error";
+		default:
+			return "not_installed";
 	}
 }
 
@@ -130,6 +156,282 @@ function formatBytes(bytes: number | null | undefined): string | null {
 	return `${value.toFixed(decimals)} ${units[unitIndex]}`;
 }
 
+function resolveModelDisplayStatus(args: {
+	model: ModelCatalogItem;
+	progressEntry: ModelProgressEntry | null;
+	isPreparing: boolean;
+	isDeleting: boolean;
+	isSwitching: boolean;
+}): ModelDisplayStatus {
+	if (args.isDeleting) {
+		return "deleting";
+	}
+	if (args.isSwitching) {
+		return "switching";
+	}
+	if (args.isPreparing || args.model.status === "downloading") {
+		switch (args.progressEntry?.stage) {
+			case "queued":
+				return "queued";
+			case "loading":
+				return "loading";
+			default:
+				return "downloading";
+		}
+	}
+	if (args.model.status === "deleting") {
+		return "deleting";
+	}
+	if (args.model.status === "installed") {
+		return "installed";
+	}
+	if (args.model.status === "error") {
+		return "error";
+	}
+	return "not_installed";
+}
+
+function formatModelProgressLabel(args: {
+	status: ModelDisplayStatus;
+	progressEntry: ModelProgressEntry | null;
+}): string {
+	if (args.status === "deleting") {
+		return "Removing model files...";
+	}
+	if (args.status === "switching") {
+		return "Switching active model...";
+	}
+	if (
+		args.status === "queued" ||
+		args.status === "downloading" ||
+		args.status === "loading"
+	) {
+		const message =
+			args.progressEntry?.message ||
+			(args.status === "queued"
+				? "Queued for preparation..."
+				: args.status === "loading"
+					? "Loading model runtime..."
+					: "Downloading model files...");
+		const progressPercent =
+			typeof args.progressEntry?.progress === "number"
+				? Math.round(args.progressEntry.progress * 100)
+				: null;
+		const downloaded = formatBytes(args.progressEntry?.downloadedBytes);
+		const total = formatBytes(args.progressEntry?.totalBytes);
+		if (
+			progressPercent !== null &&
+			typeof downloaded === "string" &&
+			typeof total === "string"
+		) {
+			return `${message} ${progressPercent}% (${downloaded} / ${total})`;
+		}
+		if (progressPercent !== null) {
+			return `${message} ${progressPercent}%`;
+		}
+		return message;
+	}
+	return "";
+}
+
+function deriveEngineIndicator(args: {
+	snapshot: AppSnapshot;
+	selectedModel: ModelCatalogItem | null;
+	selectedModelStatus: ModelDisplayStatus | null;
+	isSelectingModelId: ModelId | null;
+	isPreparingModelId: ModelId | null;
+	isDeletingModelId: ModelId | null;
+}): { kind: EngineStatusKind; label: string; detail: string } {
+	const { snapshot, selectedModelStatus, selectedModel } = args;
+
+	if (snapshot.accelerationInstaller.status === "installing") {
+		return {
+			kind: "starting",
+			label: "Installing runtime",
+			detail:
+				snapshot.accelerationInstaller.message ||
+				"Setting up acceleration runtime.",
+		};
+	}
+	if (args.isSelectingModelId) {
+		return {
+			kind: "starting",
+			label: "Switching model",
+			detail: "Applying selected model for the next dictation.",
+		};
+	}
+	if (args.isDeletingModelId) {
+		return {
+			kind: "warning",
+			label: "Deleting model",
+			detail: "Removing model files from local disk.",
+		};
+	}
+	if (args.isPreparingModelId) {
+		return {
+			kind: "starting",
+			label: "Preparing model",
+			detail: "Downloading and loading selected model.",
+		};
+	}
+
+	switch (snapshot.pill.state) {
+		case "recording":
+			return {
+				kind: "ready",
+				label: "Listening",
+				detail: "Capturing microphone audio while hotkey is held.",
+			};
+		case "transcribing":
+			return {
+				kind: "starting",
+				label: "Transcribing",
+				detail: "Converting captured audio to text.",
+			};
+		case "failure":
+			return {
+				kind: "error",
+				label: "Transcription failed",
+				detail: "Last dictation failed. Try again.",
+			};
+		default:
+			break;
+	}
+
+	if (snapshot.sidecarStatus === "error") {
+		return {
+			kind: "error",
+			label: "Runtime error",
+			detail: "Speech runtime is unavailable right now.",
+		};
+	}
+	if (snapshot.sidecarStatus === "starting") {
+		return {
+			kind: "starting",
+			label: "Starting runtime",
+			detail: "Initializing speech runtime.",
+		};
+	}
+	if (snapshot.sidecarStatus === "stopped") {
+		return {
+			kind: "warning",
+			label: "Runtime idle",
+			detail: "Runtime will start on next dictation.",
+		};
+	}
+	if (!selectedModel) {
+		return {
+			kind: "warning",
+			label: "No model",
+			detail: "Select a model to start dictation.",
+		};
+	}
+	if (
+		selectedModelStatus === "not_installed" ||
+		selectedModelStatus === "error"
+	) {
+		return {
+			kind: "warning",
+			label: "Model not ready",
+			detail: `${selectedModel.label} needs preparation.`,
+		};
+	}
+	if (
+		selectedModelStatus === "queued" ||
+		selectedModelStatus === "downloading" ||
+		selectedModelStatus === "loading" ||
+		selectedModelStatus === "switching"
+	) {
+		return {
+			kind: "starting",
+			label: "Model preparing",
+			detail: `${selectedModel.label} is being prepared.`,
+		};
+	}
+
+	return {
+		kind: "ready",
+		label: "Ready",
+		detail: `${selectedModel.label} is ready for dictation.`,
+	};
+}
+
+function buildOverviewMessages(args: {
+	snapshot: AppSnapshot;
+	settings: AppSnapshot["settings"];
+	selectedModel: ModelCatalogItem | null;
+	selectedModelStatus: ModelDisplayStatus | null;
+}): { warnings: string[]; tips: string[] } {
+	const warnings: string[] = [];
+	const tips: string[] = [
+		"First dictation after app launch can be slower while the model runtime warms.",
+		"Hold Ctrl + Shift only while speaking, then release to transcribe immediately.",
+		"Model files stay on disk after download, so later sessions avoid re-download delays.",
+	];
+
+	if (args.snapshot.sidecarStatus === "error") {
+		warnings.push(
+			"Speech runtime is in an error state. Restart Dictate if this persists.",
+		);
+	}
+	if (
+		args.settings.accelerationMode === "cuda" &&
+		args.snapshot.hardware.asrRuntime !== "cuda"
+	) {
+		warnings.push(
+			"CUDA is selected, but the active runtime is not CUDA yet. Transcription may be slower until CUDA is active.",
+		);
+	}
+	if (!args.selectedModel) {
+		warnings.push("No default model is selected. Choose a model in Models.");
+	} else {
+		if (args.selectedModel.hardwareSupport === "unsupported") {
+			warnings.push(
+				args.selectedModel.hardwareReason ||
+					"Selected model is not supported on this hardware.",
+			);
+		}
+		if (
+			args.selectedModelStatus === "not_installed" ||
+			args.selectedModelStatus === "error"
+		) {
+			warnings.push(
+				`${args.selectedModel.label} is not ready yet. Download or retry preparation in Models.`,
+			);
+		}
+		if (
+			args.selectedModelStatus === "queued" ||
+			args.selectedModelStatus === "downloading" ||
+			args.selectedModelStatus === "loading" ||
+			args.selectedModelStatus === "switching"
+		) {
+			warnings.push(
+				`${args.selectedModel.label} is still preparing. First-use latency will be higher until ready.`,
+			);
+		}
+
+		if (args.selectedModel.id === "UsefulSensors/moonshine-streaming-tiny") {
+			tips.push(
+				"Moonshine Tiny is fastest and lightest, with lower accuracy than larger models.",
+			);
+		} else if (
+			args.selectedModel.id === "nvidia/parakeet-tdt-0.6b-v3" ||
+			args.selectedModel.id === "nvidia/canary-qwen-2.5b"
+		) {
+			tips.push(
+				"Parakeet/Canary improve accuracy but use more GPU memory than Moonshine models.",
+			);
+		}
+	}
+
+	if (args.snapshot.pill.state === "failure") {
+		warnings.push(
+			"Last transcription failed. Try speaking closer to the microphone.",
+		);
+	}
+
+	return { warnings, tips };
+}
 function App() {
 	const runtime = useDictateRuntime();
 	const [themePreference, setThemePreference] = useState<ThemePreference>(
@@ -185,7 +487,6 @@ function App() {
 
 	const settings = runtime.settings;
 	const snapshot = runtime.snapshot;
-	const sidecar = snapshot.sidecarStatus;
 	const accelerationInstaller = snapshot.accelerationInstaller;
 	const showCudaInstaller =
 		settings.accelerationMode === "cuda" &&
@@ -196,6 +497,41 @@ function App() {
 	const isInstallingCuda =
 		accelerationInstaller.status === "installing" &&
 		accelerationInstaller.mode === "cuda";
+	const selectedModel =
+		runtime.models.find((model) => model.id === settings.defaultModelId) ??
+		null;
+	const selectedModelProgress = selectedModel
+		? (snapshot.modelProgressById[selectedModel.id] ?? null)
+		: null;
+	const selectedModelStatus = selectedModel
+		? resolveModelDisplayStatus({
+				model: selectedModel,
+				progressEntry: selectedModelProgress,
+				isPreparing: runtime.isPreparingModelId === selectedModel.id,
+				isDeleting: runtime.isDeletingModelId === selectedModel.id,
+				isSwitching: runtime.isSelectingModelId === selectedModel.id,
+			})
+		: null;
+	const selectedModelProgressLabel = selectedModelStatus
+		? formatModelProgressLabel({
+				status: selectedModelStatus,
+				progressEntry: selectedModelProgress,
+			})
+		: "";
+	const engineIndicator = deriveEngineIndicator({
+		snapshot,
+		selectedModel,
+		selectedModelStatus,
+		isSelectingModelId: runtime.isSelectingModelId,
+		isPreparingModelId: runtime.isPreparingModelId,
+		isDeletingModelId: runtime.isDeletingModelId,
+	});
+	const overviewMessages = buildOverviewMessages({
+		snapshot,
+		settings,
+		selectedModel,
+		selectedModelStatus,
+	});
 	const toastToRender =
 		runtime.latestToast &&
 		(runtime.latestToast.type === "error" ||
@@ -211,8 +547,8 @@ function App() {
 						<span className="window-title">Dictate</span>
 					</div>
 					<div className="window-actions no-drag">
-						<div className={`status-pill ${sidecar}`}>
-							{statusLabel(sidecar)}
+						<div className={`status-pill ${engineIndicator.kind}`}>
+							{engineIndicator.label}
 						</div>
 						<button
 							type="button"
@@ -376,6 +712,56 @@ function App() {
 								</section>
 
 								<section className="info-card">
+									<p className="sidebar-label">Engine Status</p>
+									<div className="engine-status-row">
+										<span className={`status-pill ${engineIndicator.kind}`}>
+											{engineIndicator.label}
+										</span>
+										<p className="engine-status-detail">
+											{engineIndicator.detail}
+										</p>
+									</div>
+									{selectedModel ? (
+										<p className="history-model">
+											Model {selectedModel.label} •{" "}
+											{modelStatusLabel(
+												selectedModelStatus ?? "not_installed",
+												true,
+											)}
+											{selectedModelProgressLabel
+												? ` • ${selectedModelProgressLabel}`
+												: ""}
+										</p>
+									) : null}
+								</section>
+
+								<section className="info-card">
+									<p className="sidebar-label">Warnings & Tips</p>
+									<div className="overview-messages-block">
+										<p className="overview-message-heading">Warnings</p>
+										{overviewMessages.warnings.length > 0 ? (
+											<ul className="overview-message-list warnings">
+												{overviewMessages.warnings.map((message) => (
+													<li key={message}>{message}</li>
+												))}
+											</ul>
+										) : (
+											<p className="overview-message-clear">
+												No active warnings.
+											</p>
+										)}
+									</div>
+									<div className="overview-messages-block">
+										<p className="overview-message-heading">Tips</p>
+										<ul className="overview-message-list tips">
+											{overviewMessages.tips.map((message) => (
+												<li key={message}>{message}</li>
+											))}
+										</ul>
+									</div>
+								</section>
+
+								<section className="info-card">
 									<p className="sidebar-label">Latest Successful Transcript</p>
 									<p className="transcript-line">
 										{runtime.lastTranscript || "No transcript yet."}
@@ -444,63 +830,56 @@ function App() {
 											const isActive = model.id === settings.defaultModelId;
 											const isUnsupported =
 												model.hardwareSupport === "unsupported";
-											const isDownloading =
-												model.status === "downloading" ||
+											const isPreparing =
 												runtime.isPreparingModelId === model.id;
-											const isDeleting =
-												model.status === "deleting" ||
-												runtime.isDeletingModelId === model.id;
-											const isBusy = isDownloading || isDeleting;
+											const isDeleting = runtime.isDeletingModelId === model.id;
+											const isSwitching =
+												runtime.isSelectingModelId === model.id;
 											const modelProgress =
-												snapshot.modelProgressById[model.id];
+												snapshot.modelProgressById[model.id] ?? null;
+											const displayStatus = resolveModelDisplayStatus({
+												model,
+												progressEntry: modelProgress,
+												isPreparing,
+												isDeleting,
+												isSwitching,
+											});
+											const isBusy =
+												displayStatus === "queued" ||
+												displayStatus === "downloading" ||
+												displayStatus === "loading" ||
+												displayStatus === "switching" ||
+												displayStatus === "deleting";
 											const progressPercent =
 												typeof modelProgress?.progress === "number"
 													? Math.round(modelProgress.progress * 100)
 													: null;
-											const progressDownloaded = formatBytes(
-												modelProgress?.downloadedBytes,
-											);
-											const progressTotal = formatBytes(
-												modelProgress?.totalBytes,
-											);
-											const progressMessage = isDeleting
-												? "Removing model files..."
-												: modelProgress?.message ||
-													"Downloading and loading model...";
-											const progressLabel = isDeleting
-												? progressMessage
-												: progressPercent !== null &&
-														progressDownloaded &&
-														progressTotal
-													? `${progressMessage} ${progressPercent}% (${progressDownloaded} / ${progressTotal})`
-													: progressPercent !== null
-														? `${progressMessage} ${progressPercent}%`
-														: progressMessage;
+											const progressLabel = formatModelProgressLabel({
+												status: displayStatus,
+												progressEntry: modelProgress,
+											});
 											const isConfirmingDelete =
 												confirmDeleteModelId === model.id;
-											const effectiveStatus = isDeleting
-												? "deleting"
-												: isDownloading
-													? "downloading"
-													: model.status;
 											const canDownload =
 												!isUnsupported &&
 												!isBusy &&
-												model.status !== "installed" &&
+												displayStatus !== "installed" &&
 												runtime.isPreparingModelId === null &&
-												runtime.isDeletingModelId === null;
+												runtime.isDeletingModelId === null &&
+												runtime.isSelectingModelId === null;
 											const canActivate =
 												!isUnsupported &&
-												model.status === "installed" &&
+												displayStatus === "installed" &&
 												!isActive &&
-												!isDeleting &&
 												runtime.isPreparingModelId === null &&
-												runtime.isDeletingModelId === null;
+												runtime.isDeletingModelId === null &&
+												runtime.isSelectingModelId === null;
 											const canDelete =
-												model.status === "installed" &&
+												displayStatus === "installed" &&
 												!isDeleting &&
 												runtime.isPreparingModelId === null &&
-												runtime.isDeletingModelId === null;
+												runtime.isDeletingModelId === null &&
+												runtime.isSelectingModelId === null;
 
 											return (
 												<li
@@ -530,9 +909,9 @@ function App() {
 																{hardwareSupportLabel(model.hardwareSupport)}
 															</span>
 															<span
-																className={`model-badge ${effectiveStatus}`}
+																className={`model-badge ${modelStatusClass(displayStatus)}`}
 															>
-																{modelStatusLabel(effectiveStatus)}
+																{modelStatusLabel(displayStatus, isActive)}
 															</span>
 															<button
 																type="button"
@@ -542,7 +921,9 @@ function App() {
 																	void runtime.downloadModel(model.id)
 																}
 															>
-																{isDownloading ? (
+																{displayStatus === "queued" ||
+																displayStatus === "downloading" ||
+																displayStatus === "loading" ? (
 																	<>
 																		<Loader2 className="h-4 w-4 animate-spin" />
 																		<span>Preparing</span>
@@ -561,7 +942,16 @@ function App() {
 																	void runtime.selectModel(model.id)
 																}
 															>
-																{isActive ? "Active" : "Use"}
+																{displayStatus === "switching" ? (
+																	<>
+																		<Loader2 className="h-4 w-4 animate-spin" />
+																		<span>Switching</span>
+																	</>
+																) : isActive ? (
+																	"Active"
+																) : (
+																	"Use"
+																)}
 															</button>
 															<button
 																type="button"
@@ -615,12 +1005,16 @@ function App() {
 															<div className="model-progress">
 																<div
 																	className={`model-progress-bar ${
-																		progressPercent === null
+																		progressPercent === null ||
+																		displayStatus === "switching" ||
+																		displayStatus === "deleting"
 																			? "indeterminate"
 																			: "determinate"
 																	}`}
 																	style={
-																		progressPercent === null
+																		progressPercent === null ||
+																		displayStatus === "switching" ||
+																		displayStatus === "deleting"
 																			? undefined
 																			: {
 																					width: `${Math.max(progressPercent, 4)}%`,

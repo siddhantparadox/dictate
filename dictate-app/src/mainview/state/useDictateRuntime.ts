@@ -24,6 +24,7 @@ export interface UseDictateRuntimeResult {
 	latestToast: ToastPayload | null;
 	lastTranscript: string;
 	isDictating: boolean;
+	isSelectingModelId: ModelId | null;
 	isPreparingModelId: ModelId | null;
 	isDeletingModelId: ModelId | null;
 	isUpdatingSettings: boolean;
@@ -47,6 +48,9 @@ export function useDictateRuntime(): UseDictateRuntimeResult {
 	});
 	const [latestToast, setLatestToast] = useState<ToastPayload | null>(null);
 	const [isDictating, setIsDictating] = useState(false);
+	const [isSelectingModelId, setIsSelectingModelId] = useState<ModelId | null>(
+		null,
+	);
 	const [isPreparingModelId, setIsPreparingModelId] = useState<ModelId | null>(
 		null,
 	);
@@ -131,6 +135,16 @@ export function useDictateRuntime(): UseDictateRuntimeResult {
 	}, [latestToast]);
 
 	useEffect(() => {
+		if (!isSelectingModelId || !snapshot) {
+			return;
+		}
+
+		if (snapshot.settings.defaultModelId === isSelectingModelId) {
+			setIsSelectingModelId(null);
+		}
+	}, [isSelectingModelId, snapshot]);
+
+	useEffect(() => {
 		if (!isPreparingModelId || !snapshot) {
 			return;
 		}
@@ -186,10 +200,12 @@ export function useDictateRuntime(): UseDictateRuntimeResult {
 	}, [snapshot?.recentJobs]);
 
 	const selectModel = useCallback(async (modelId: ModelId): Promise<void> => {
+		setIsSelectingModelId(modelId);
 		try {
 			await rpcClient.setDefaultModel(modelId);
 		} catch (error) {
 			void rpcClient.reportRendererError("selectModel", error);
+			setIsSelectingModelId(null);
 		}
 	}, []);
 
@@ -295,6 +311,7 @@ export function useDictateRuntime(): UseDictateRuntimeResult {
 		latestToast,
 		lastTranscript,
 		isDictating,
+		isSelectingModelId,
 		isPreparingModelId,
 		isDeletingModelId,
 		isUpdatingSettings,
