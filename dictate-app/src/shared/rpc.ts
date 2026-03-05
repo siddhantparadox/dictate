@@ -1,4 +1,9 @@
-import type { ModelCatalogItem, ModelId } from "./models";
+import type {
+	CudaGraphsStatus,
+	InferenceEngine,
+	ModelCatalogItem,
+	ModelId,
+} from "./models";
 
 type NoParams = Record<string, never>;
 type RequestSpec = { params: unknown; response: unknown };
@@ -44,6 +49,30 @@ export interface JobRecord {
 	transcript: string;
 }
 
+export interface ModelRuntimeProfile {
+	targetEngine: InferenceEngine;
+	activeEngine: InferenceEngine;
+	status: "ready" | "fallback" | "unsupported";
+	tensorRtSupported: boolean;
+	strictTensorRtWhenSupported: boolean;
+	quantizationLabel: string;
+	cudaGraphs: CudaGraphsStatus;
+	detail: string;
+}
+
+export interface ModelWarmupState {
+	state:
+		| "idle"
+		| "loading_runtime"
+		| "loading_model"
+		| "warming_up"
+		| "ready"
+		| "error";
+	modelId: ModelId | null;
+	detail: string;
+	updatedAt: string;
+}
+
 export interface AppSnapshot {
 	pillState: RecordingPillState;
 	pill: {
@@ -53,6 +82,8 @@ export interface AppSnapshot {
 	};
 	settings: DictateSettings;
 	models: ModelCatalogItem[];
+	modelRuntimeById: Partial<Record<ModelId, ModelRuntimeProfile>>;
+	warmup: ModelWarmupState;
 	hardware: {
 		platform: "win32" | "darwin" | "linux" | "unknown";
 		cpuModel: string;

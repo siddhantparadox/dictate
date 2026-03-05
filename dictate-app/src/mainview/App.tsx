@@ -22,7 +22,12 @@ import {
 	getThemePreference,
 	type ThemePreference,
 } from "@/mainview/theme";
-import type { ModelCatalogItem, ModelId } from "@/shared/models";
+import type {
+	CudaGraphsStatus,
+	InferenceEngine,
+	ModelCatalogItem,
+	ModelId,
+} from "@/shared/models";
 import type { AppSnapshot } from "@/shared/rpc";
 
 type MainSection = "overview" | "history" | "models" | "settings";
@@ -126,6 +131,45 @@ function accelerationModeLabel(mode: "auto" | "cpu" | "cuda"): string {
 			return "CPU";
 		default:
 			return "Auto";
+	}
+}
+
+function engineLabel(engine: InferenceEngine): string {
+	switch (engine) {
+		case "tensorrt":
+			return "TensorRT";
+		case "moonshine":
+			return "Moonshine";
+		default:
+			return "PyTorch";
+	}
+}
+
+function cudaGraphsLabel(status: CudaGraphsStatus): string {
+	switch (status) {
+		case "enabled":
+			return "Enabled";
+		case "disabled":
+			return "Disabled";
+		default:
+			return "N/A";
+	}
+}
+
+function warmupStateLabel(state: AppSnapshot["warmup"]["state"]): string {
+	switch (state) {
+		case "loading_runtime":
+			return "Loading runtime";
+		case "loading_model":
+			return "Loading model";
+		case "warming_up":
+			return "Warming up";
+		case "ready":
+			return "Ready";
+		case "error":
+			return "Warm-up error";
+		default:
+			return "Idle";
 	}
 }
 
@@ -349,10 +393,45 @@ function deriveEngineIndicator(args: {
 		};
 	}
 
+	const warmup = snapshot.warmup;
+	if (warmup.modelId === selectedModel.id) {
+		if (warmup.state === "loading_runtime") {
+			return {
+				kind: "starting",
+				label: "Loading runtime",
+				detail: warmup.detail,
+			};
+		}
+		if (warmup.state === "loading_model") {
+			return {
+				kind: "starting",
+				label: "Loading model",
+				detail: warmup.detail,
+			};
+		}
+		if (warmup.state === "warming_up") {
+			return {
+				kind: "starting",
+				label: "Warming up",
+				detail: warmup.detail,
+			};
+		}
+		if (warmup.state === "error") {
+			return {
+				kind: "warning",
+				label: "Warm-up issue",
+				detail: warmup.detail,
+			};
+		}
+	}
+
 	return {
 		kind: "ready",
 		label: "Ready",
-		detail: `${selectedModel.label} is ready for dictation.`,
+		detail:
+			warmup.modelId === selectedModel.id && warmup.state === "ready"
+				? warmup.detail
+				: `${selectedModel.label} is ready for dictation.`,
 	};
 }
 
@@ -361,6 +440,7 @@ function buildOverviewMessages(args: {
 	settings: AppSnapshot["settings"];
 	selectedModel: ModelCatalogItem | null;
 	selectedModelStatus: ModelDisplayStatus | null;
+	selectedModelRuntime: AppSnapshot["modelRuntimeById"][ModelId] | null;
 }): { warnings: string[]; tips: string[] } {
 	const warnings: string[] = [];
 	const tips: string[] = [
@@ -410,6 +490,25 @@ function buildOverviewMessages(args: {
 			);
 		}
 
+		if (args.selectedModelRuntime?.status === "fallback") {
+			warnings.push(args.selectedModelRuntime.detail);
+		}
+
+		if (args.snapshot.warmup.modelId === args.selectedModel.id) {
+			if (args.snapshot.warmup.state === "error") {
+				warnings.push(args.snapshot.warmup.detail);
+			}
+			if (
+				args.snapshot.warmup.state === "loading_runtime" ||
+				args.snapshot.warmup.state === "loading_model" ||
+				args.snapshot.warmup.state === "warming_up"
+			) {
+				warnings.push(
+					`${warmupStateLabel(args.snapshot.warmup.state)}: ${args.snapshot.warmup.detail}`,
+				);
+			}
+		}
+
 		if (args.selectedModel.id === "UsefulSensors/moonshine-streaming-tiny") {
 			tips.push(
 				"Moonshine Tiny is fastest and lightest, with lower accuracy than larger models.",
@@ -420,6 +519,15 @@ function buildOverviewMessages(args: {
 		) {
 			tips.push(
 				"Parakeet/Canary improve accuracy but use more GPU memory than Moonshine models.",
+			);
+		}
+
+		if (
+			args.selectedModelRuntime?.strictTensorRtWhenSupported &&
+			!args.selectedModelRuntime.tensorRtSupported
+		) {
+			tips.push(
+				"TensorRT policy is enabled globally, but this model currently runs on PyTorch in this build.",
 			);
 		}
 	}
@@ -500,6 +608,9 @@ function App() {
 	const selectedModel =
 		runtime.models.find((model) => model.id === settings.defaultModelId) ??
 		null;
+	const selectedModelRuntime = selectedModel
+		? (snapshot.modelRuntimeById[selectedModel.id] ?? null)
+		: null;
 	const selectedModelProgress = selectedModel
 		? (snapshot.modelProgressById[selectedModel.id] ?? null)
 		: null;
@@ -531,6 +642,7 @@ function App() {
 		settings,
 		selectedModel,
 		selectedModelStatus,
+		selectedModelRuntime,
 	});
 	const toastToRender =
 		runtime.latestToast &&
@@ -722,16 +834,31 @@ function App() {
 										</p>
 									</div>
 									{selectedModel ? (
-										<p className="history-model">
-											Model {selectedModel.label} •{" "}
-											{modelStatusLabel(
-												selectedModelStatus ?? "not_installed",
-												true,
-											)}
-											{selectedModelProgressLabel
-												? ` • ${selectedModelProgressLabel}`
-												: ""}
-										</p>
+										<>
+											<p className="history-model">
+												Model {selectedModel.label} •{" "}
+												{modelStatusLabel(
+													selectedModelStatus ?? "not_installed",
+													true,
+												)}
+												{selectedModelProgressLabel
+													? ` • ${selectedModelProgressLabel}`
+													: ""}
+											</p>
+											{selectedModelRuntime ? (
+												<p className="history-model">
+													Engine{" "}
+													{engineLabel(selectedModelRuntime.activeEngine)} •
+													Quantization {selectedModelRuntime.quantizationLabel}{" "}
+													• CUDA Graphs{" "}
+													{cudaGraphsLabel(selectedModelRuntime.cudaGraphs)}
+												</p>
+											) : null}
+											<p className="history-model">
+												Warm-up {warmupStateLabel(snapshot.warmup.state)} •{" "}
+												{snapshot.warmup.detail}
+											</p>
+										</>
 									) : null}
 								</section>
 
@@ -837,6 +964,8 @@ function App() {
 												runtime.isSelectingModelId === model.id;
 											const modelProgress =
 												snapshot.modelProgressById[model.id] ?? null;
+											const runtimeProfile =
+												snapshot.modelRuntimeById[model.id] ?? null;
 											const displayStatus = resolveModelDisplayStatus({
 												model,
 												progressEntry: modelProgress,
@@ -894,6 +1023,21 @@ function App() {
 																{modelRuntimeLabel(model.runtime)}
 															</p>
 															<p className="model-notes">{model.notes}</p>
+															{runtimeProfile ? (
+																<p className="model-hint">
+																	Engine{" "}
+																	{engineLabel(runtimeProfile.activeEngine)} •
+																	Quantization{" "}
+																	{runtimeProfile.quantizationLabel} • CUDA
+																	Graphs{" "}
+																	{cudaGraphsLabel(runtimeProfile.cudaGraphs)}
+																</p>
+															) : null}
+															{runtimeProfile?.detail ? (
+																<p className="model-hint">
+																	{runtimeProfile.detail}
+																</p>
+															) : null}
 															{model.hardwareReason ? (
 																<p className="model-hint">
 																	{model.hardwareReason}
@@ -908,6 +1052,13 @@ function App() {
 															>
 																{hardwareSupportLabel(model.hardwareSupport)}
 															</span>
+															{runtimeProfile ? (
+																<span
+																	className={`model-badge engine ${runtimeProfile.activeEngine} ${runtimeProfile.status}`}
+																>
+																	{engineLabel(runtimeProfile.activeEngine)}
+																</span>
+															) : null}
 															<span
 																className={`model-badge ${modelStatusClass(displayStatus)}`}
 															>

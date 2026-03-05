@@ -533,6 +533,32 @@
 	color: var(--error-text);
 }
 
+.model-badge.engine.tensorrt {
+	background: hsl(151 79% 46% / 0.14);
+	border-color: hsl(151 79% 46% / 0.4);
+	color: hsl(151 78% 64%);
+}
+
+.model-badge.engine.pytorch {
+	background: hsl(221 82% 60% / 0.14);
+	border-color: hsl(221 82% 60% / 0.42);
+	color: hsl(221 86% 72%);
+}
+
+.model-badge.engine.moonshine {
+	background: hsl(193 82% 56% / 0.14);
+	border-color: hsl(193 82% 56% / 0.4);
+	color: hsl(193 86% 69%);
+}
+
+.model-badge.engine.fallback {
+	box-shadow: inset 0 0 0 1px hsl(34 84% 56% / 0.42);
+}
+
+.model-badge.engine.unsupported {
+	opacity: 0.74;
+}
+
 .quiet-button {
 	display: inline-flex;
 	align-items: center;

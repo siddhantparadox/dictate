@@ -13,7 +13,12 @@ import Electrobun, {
 	Updater,
 	Utils,
 } from "electrobun/bun";
-import { DEFAULT_MODEL_ID, type ModelId } from "../shared/models";
+import {
+	DEFAULT_MODEL_ID,
+	type InferenceEngine,
+	type ModelCatalogItem,
+	type ModelId,
+} from "../shared/models";
 import type {
 	AppSnapshot,
 	DeleteModelResult,
@@ -58,6 +63,8 @@ const MODIFIER_HOTKEY_REARM_MS = 120;
 const CUDA_PROBE_TIMEOUT_MS = 6_000;
 const HF_XET_PROBE_TIMEOUT_MS = 4_000;
 const HF_XET_INSTALL_TIMEOUT_MS = 6 * 60_000;
+const MODEL_WARMUP_BOOT_DELAY_MS = 320;
+const MODEL_WARMUP_STAGE_DELAY_MS = 140;
 
 const VK_CONTROL = 0x11;
 const VK_SHIFT = 0x10;
@@ -78,6 +85,8 @@ type AccelerationMode = DictateSettings["accelerationMode"];
 type ModelProgressEntry = NonNullable<
 	AppSnapshot["modelProgressById"][ModelId]
 >;
+type ModelRuntimeById = AppSnapshot["modelRuntimeById"];
+type WarmupState = AppSnapshot["warmup"];
 const runtimeProbeCache = new Map<string, boolean>();
 const hfXetProbeCache = new Map<string, boolean>();
 const hfXetInstallInFlight = new Map<string, Promise<void>>();
@@ -498,6 +507,15 @@ let accelerationInstallerState: AppSnapshot["accelerationInstaller"] = {
 	message: "",
 	updatedAt: new Date().toISOString(),
 };
+let warmupState: WarmupState = {
+	state: "idle",
+	modelId: null,
+	detail: "Select an installed model to warm up.",
+	updatedAt: new Date().toISOString(),
+};
+let warmupInFlight = false;
+let warmupPending = false;
+let lastWarmupSignature: string | null = null;
 let settingsUpdateQueue: Promise<void> = Promise.resolve();
 
 function sleep(ms: number): Promise<void> {
@@ -527,6 +545,236 @@ function setAccelerationInstallerState(
 		...next,
 		updatedAt: new Date().toISOString(),
 	};
+}
+
+function setWarmupState(next: Omit<WarmupState, "updatedAt">): void {
+	warmupState = {
+		...next,
+		updatedAt: new Date().toISOString(),
+	};
+}
+
+function getModelLabel(modelId: ModelId): string {
+	return modelsCache.find((model) => model.id === modelId)?.label ?? modelId;
+}
+
+function resolveTargetEngine(model: ModelCatalogItem): InferenceEngine {
+	if (
+		model.inference.strictTensorRtWhenSupported &&
+		model.inference.tensorRtSupported
+	) {
+		return "tensorrt";
+	}
+	return model.inference.defaultEngine;
+}
+
+function resolveModelRuntimeProfile(
+	model: ModelCatalogItem,
+	settings: DictateSettings,
+): NonNullable<ModelRuntimeById[ModelId]> {
+	const targetEngine = resolveTargetEngine(model);
+	let activeEngine: InferenceEngine = model.inference.defaultEngine;
+	let status: NonNullable<ModelRuntimeById[ModelId]>["status"] = "ready";
+	let detail = "";
+
+	if (model.hardwareSupport === "unsupported") {
+		return {
+			targetEngine,
+			activeEngine,
+			status: "unsupported",
+			tensorRtSupported: model.inference.tensorRtSupported,
+			strictTensorRtWhenSupported: model.inference.strictTensorRtWhenSupported,
+			quantizationLabel: model.inference.quantizationLabel,
+			cudaGraphs: model.inference.cudaGraphs,
+			detail:
+				model.hardwareReason ??
+				"This model is not supported on current hardware.",
+		};
+	}
+
+	if (model.runtime === "cpu") {
+		activeEngine = "moonshine";
+		detail = "CPU runtime path (Moonshine engine).";
+		return {
+			targetEngine,
+			activeEngine,
+			status,
+			tensorRtSupported: model.inference.tensorRtSupported,
+			strictTensorRtWhenSupported: model.inference.strictTensorRtWhenSupported,
+			quantizationLabel: model.inference.quantizationLabel,
+			cudaGraphs: model.inference.cudaGraphs,
+			detail,
+		};
+	}
+
+	if (hardwareSnapshot.asrRuntime !== "cuda") {
+		activeEngine = "pytorch";
+		status = "fallback";
+		detail =
+			settings.accelerationMode === "cuda"
+				? "CUDA was requested but runtime is not CUDA-active; running fallback path."
+				: "CUDA runtime is not active; TensorRT is unavailable and PyTorch GPU path is idle.";
+		return {
+			targetEngine,
+			activeEngine,
+			status,
+			tensorRtSupported: model.inference.tensorRtSupported,
+			strictTensorRtWhenSupported: model.inference.strictTensorRtWhenSupported,
+			quantizationLabel: model.inference.quantizationLabel,
+			cudaGraphs: model.inference.cudaGraphs,
+			detail,
+		};
+	}
+
+	activeEngine = targetEngine;
+	if (targetEngine === "tensorrt") {
+		detail = "TensorRT enforced by policy for this model/runtime.";
+	} else {
+		detail =
+			"Running PyTorch CUDA path. TensorRT is not configured for this model in this build.";
+	}
+
+	return {
+		targetEngine,
+		activeEngine,
+		status,
+		tensorRtSupported: model.inference.tensorRtSupported,
+		strictTensorRtWhenSupported: model.inference.strictTensorRtWhenSupported,
+		quantizationLabel: model.inference.quantizationLabel,
+		cudaGraphs: model.inference.cudaGraphs,
+		detail,
+	};
+}
+
+function buildModelRuntimeById(
+	settings: DictateSettings,
+	modelsForHardware: ModelCatalogItem[],
+): ModelRuntimeById {
+	const runtimeById: ModelRuntimeById = {};
+	for (const model of modelsForHardware) {
+		runtimeById[model.id] = resolveModelRuntimeProfile(model, settings);
+	}
+	return runtimeById;
+}
+
+function buildWarmupSignature(modelId: ModelId): string {
+	const settings = storage.getSettings();
+	return [
+		modelId,
+		settings.accelerationMode,
+		hardwareSnapshot.asrRuntime,
+		sidecar.getPythonBin(),
+	].join("|");
+}
+
+function triggerSelectedModelWarmup(reason: string): void {
+	if (warmupInFlight) {
+		warmupPending = true;
+		return;
+	}
+
+	warmupInFlight = true;
+	void (async () => {
+		try {
+			if (isTranscriptionActive()) {
+				setWarmupState({
+					state: "idle",
+					modelId: storage.getSettings().defaultModelId,
+					detail: "Warm-up pauses while transcription is active.",
+				});
+				await broadcastSnapshot({ target: "main" });
+				return;
+			}
+
+			refreshModelsCache();
+			const settings = storage.getSettings();
+			const modelId = settings.defaultModelId;
+			const model = modelsCache.find((candidate) => candidate.id === modelId);
+			if (!model || model.status !== "installed") {
+				lastWarmupSignature = null;
+				setWarmupState({
+					state: "idle",
+					modelId,
+					detail: "Download the selected model to enable warm-up.",
+				});
+				await broadcastSnapshot({ target: "main" });
+				return;
+			}
+
+			const unsupportedReason = getUnsupportedModelReason(modelId);
+			if (unsupportedReason) {
+				setWarmupState({
+					state: "error",
+					modelId,
+					detail: unsupportedReason,
+				});
+				await broadcastSnapshot({ target: "main" });
+				return;
+			}
+
+			const signature = buildWarmupSignature(modelId);
+			if (lastWarmupSignature === signature) {
+				setWarmupState({
+					state: "ready",
+					modelId,
+					detail: `${getModelLabel(modelId)} is warm and ready.`,
+				});
+				await broadcastSnapshot({ target: "main" });
+				return;
+			}
+
+			console.log(`[warmup] begin model=${modelId} reason=${reason}`);
+			setWarmupState({
+				state: "loading_runtime",
+				modelId,
+				detail: `Loading runtime for ${getModelLabel(modelId)}...`,
+			});
+			await broadcastSnapshot({ target: "main" });
+
+			setWarmupState({
+				state: "loading_model",
+				modelId,
+				detail: `Loading ${getModelLabel(modelId)} into memory...`,
+			});
+			await broadcastSnapshot({ target: "main" });
+
+			await sidecar.prepareModel(modelId);
+
+			setWarmupState({
+				state: "warming_up",
+				modelId,
+				detail: `Finalizing warm-up for ${getModelLabel(modelId)}...`,
+			});
+			await broadcastSnapshot({ target: "main" });
+			await sleep(MODEL_WARMUP_STAGE_DELAY_MS);
+
+			lastWarmupSignature = signature;
+			setModelProgress(modelId, null);
+			setWarmupState({
+				state: "ready",
+				modelId,
+				detail: `${getModelLabel(modelId)} is warm and ready.`,
+			});
+			await broadcastSnapshot({ target: "main" });
+			console.log(`[warmup] ready model=${modelId} reason=${reason}`);
+		} catch (error) {
+			const message =
+				error instanceof Error ? error.message : "Unknown warm-up error.";
+			setWarmupState({
+				state: "error",
+				modelId: storage.getSettings().defaultModelId,
+				detail: message,
+			});
+			await broadcastSnapshot({ target: "main" });
+			console.warn(`[warmup] failed reason=${reason}: ${message}`);
+		} finally {
+			warmupInFlight = false;
+			if (warmupPending) {
+				warmupPending = false;
+				triggerSelectedModelWarmup("queued");
+			}
+		}
+	})();
 }
 
 async function installHfXetIntoRuntime(pythonBin: string): Promise<void> {
@@ -731,6 +979,7 @@ async function applyAccelerationMode(mode: AccelerationMode): Promise<void> {
 	const runtime = resolveSidecarRuntime(mode);
 	sidecar.setPythonBin(runtime.pythonBin);
 	hardwareSnapshot = buildHardwareSnapshotForRuntime(runtime.runtime);
+	lastWarmupSignature = null;
 	void ensureHfXetForRuntime(runtime.pythonBin, `mode:${mode}`);
 	console.log(
 		`[sidecar] acceleration mode=${mode}; python=${runtime.pythonBin}; runtime=${runtime.runtime}`,
@@ -744,6 +993,7 @@ async function applyAccelerationMode(mode: AccelerationMode): Promise<void> {
 				"CUDA runtime was requested, but current sidecar environment is not CUDA-enabled. Running on CPU.",
 		});
 	}
+	triggerSelectedModelWarmup("acceleration-mode-change");
 }
 
 async function installAccelerationRuntime(
@@ -771,6 +1021,8 @@ async function installAccelerationRuntime(
 			mode,
 			message: "NVIDIA acceleration runtime is already installed.",
 		});
+		lastWarmupSignature = null;
+		triggerSelectedModelWarmup("runtime-install-existing");
 		await broadcastSnapshot({ target: "main" });
 		return {
 			mode,
@@ -993,11 +1245,18 @@ function withViewQuery(url: string, view: "main" | "pill"): string {
 
 function getSnapshot(): AppSnapshot {
 	try {
+		const settings = storage.getSettings();
+		const modelsForHardware = applyHardwareSupportToModels(
+			modelsCache,
+			hardwareSnapshot,
+		);
 		return {
 			pillState: currentPill.state,
 			pill: { ...currentPill },
-			settings: storage.getSettings(),
-			models: applyHardwareSupportToModels(modelsCache, hardwareSnapshot),
+			settings,
+			models: modelsForHardware,
+			modelRuntimeById: buildModelRuntimeById(settings, modelsForHardware),
+			warmup: warmupState,
 			hardware: hardwareSnapshot,
 			accelerationInstaller: accelerationInstallerState,
 			modelProgressById,
@@ -1514,6 +1773,14 @@ async function prepareModel(modelId: ModelId): Promise<PrepareModelResult> {
 			status: "installed",
 		});
 		refreshModelsCache();
+		if (storage.getSettings().defaultModelId === modelId) {
+			lastWarmupSignature = buildWarmupSignature(modelId);
+			setWarmupState({
+				state: "ready",
+				modelId,
+				detail: `${getModelLabel(modelId)} is warm and ready.`,
+			});
+		}
 		await broadcastSnapshot();
 		setModelProgress(modelId, null);
 		return {
@@ -1530,6 +1797,15 @@ async function prepareModel(modelId: ModelId): Promise<PrepareModelResult> {
 			installed: false,
 			status: "error",
 		});
+		if (storage.getSettings().defaultModelId === modelId) {
+			lastWarmupSignature = null;
+			setWarmupState({
+				state: "error",
+				modelId,
+				detail:
+					error instanceof Error ? error.message : "Model preparation failed.",
+			});
+		}
 		setModelProgress(modelId, {
 			operation: "download",
 			stage: "error",
@@ -1609,6 +1885,10 @@ async function deleteModel(modelId: ModelId): Promise<DeleteModelResult> {
 			});
 		}
 		refreshModelsCache();
+		if (warmupState.modelId === modelId) {
+			lastWarmupSignature = null;
+		}
+		triggerSelectedModelWarmup("model-delete");
 		await broadcastSnapshot();
 		return {
 			modelId,
@@ -1703,6 +1983,8 @@ function createWindowRpc(windowName: "main" | "pill") {
 					}),
 				setDefaultModel: ({ modelId }) => {
 					storage.updateSettings({ defaultModelId: modelId });
+					lastWarmupSignature = null;
+					triggerSelectedModelWarmup("default-model-change");
 					void broadcastSnapshot();
 					return getSnapshot();
 				},
@@ -1852,6 +2134,9 @@ async function bootstrap(): Promise<void> {
 	}
 	void ensureHfXetForRuntime(initialRuntime.pythonBin, "startup:active");
 	await broadcastSnapshot();
+	setTimeout(() => {
+		triggerSelectedModelWarmup("startup");
+	}, MODEL_WARMUP_BOOT_DELAY_MS);
 
 	console.log("Dictate MVP started.");
 }

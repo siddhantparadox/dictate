@@ -10,6 +10,8 @@ export type CompatibilityTier =
 	| "not_recommended";
 
 export type ModelRuntime = "cpu" | "nvidia_gpu";
+export type InferenceEngine = "tensorrt" | "pytorch" | "moonshine";
+export type CudaGraphsStatus = "enabled" | "disabled" | "not_supported";
 
 export type HardwareSupportStatus = "ready" | "works_slow" | "unsupported";
 
@@ -34,6 +36,13 @@ export interface ModelCatalogItem {
 	status: ModelInstallStatus;
 	hardwareSupport?: HardwareSupportStatus;
 	hardwareReason?: string;
+	inference: {
+		strictTensorRtWhenSupported: boolean;
+		tensorRtSupported: boolean;
+		defaultEngine: InferenceEngine;
+		quantizationLabel: string;
+		cudaGraphs: CudaGraphsStatus;
+	};
 }
 
 export const MODEL_CATALOG: ModelCatalogItem[] = [
@@ -49,6 +58,13 @@ export const MODEL_CATALOG: ModelCatalogItem[] = [
 		compatibility: "available_with_constraints",
 		installed: false,
 		status: "not_installed",
+		inference: {
+			strictTensorRtWhenSupported: true,
+			tensorRtSupported: false,
+			defaultEngine: "pytorch",
+			quantizationLabel: "BF16/FP16",
+			cudaGraphs: "disabled",
+		},
 	},
 	{
 		id: "nvidia/parakeet-tdt-0.6b-v3",
@@ -62,6 +78,13 @@ export const MODEL_CATALOG: ModelCatalogItem[] = [
 		compatibility: "available_with_constraints",
 		installed: false,
 		status: "not_installed",
+		inference: {
+			strictTensorRtWhenSupported: true,
+			tensorRtSupported: false,
+			defaultEngine: "pytorch",
+			quantizationLabel: "BF16/FP16",
+			cudaGraphs: "disabled",
+		},
 	},
 	{
 		id: "UsefulSensors/moonshine-streaming-medium",
@@ -74,6 +97,13 @@ export const MODEL_CATALOG: ModelCatalogItem[] = [
 		compatibility: "recommended",
 		installed: false,
 		status: "not_installed",
+		inference: {
+			strictTensorRtWhenSupported: false,
+			tensorRtSupported: false,
+			defaultEngine: "moonshine",
+			quantizationLabel: "FP16 (runtime default)",
+			cudaGraphs: "not_supported",
+		},
 	},
 	{
 		id: "UsefulSensors/moonshine-streaming-tiny",
@@ -86,6 +116,13 @@ export const MODEL_CATALOG: ModelCatalogItem[] = [
 		compatibility: "recommended",
 		installed: false,
 		status: "not_installed",
+		inference: {
+			strictTensorRtWhenSupported: false,
+			tensorRtSupported: false,
+			defaultEngine: "moonshine",
+			quantizationLabel: "FP16 (runtime default)",
+			cudaGraphs: "not_supported",
+		},
 	},
 ];
 
