@@ -6,6 +6,9 @@ export default {
 		identifier: "dev.dictate.desktop",
 		version: "0.1.0",
 	},
+	runtime: {
+		exitOnLastWindowClosed: false,
+	},
 	build: {
 		// Vite builds to dist/, we copy from there
 		copy: {

@@ -167,7 +167,7 @@ dictate-app/
 
 - Windows is the primary supported platform today.
 - Auto-paste is currently Windows-only and uses clipboard + `Ctrl+V`.
-- The `Launch on startup` preference is stored in settings, but OS-level auto-start wiring is not implemented yet.
+- `Launch on startup` is implemented on Windows via the current user's `Run` registry entry and opens tray-first on login.
 - GPU acceleration depends on the installed sidecar runtime, CUDA availability, and compatible hardware.
 
 ## Contributing

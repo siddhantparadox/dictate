@@ -21,7 +21,7 @@ const DEFAULT_SETTINGS: DictateSettings = {
 	autoPasteEnabled: true,
 	pasteRetryCount: 1,
 	debugLogging: false,
-	launchOnStartup: false,
+	launchOnStartup: true,
 };
 
 interface DbModelRow {

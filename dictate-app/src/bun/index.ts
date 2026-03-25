@@ -65,6 +65,9 @@ const HF_XET_PROBE_TIMEOUT_MS = 4_000;
 const HF_XET_INSTALL_TIMEOUT_MS = 6 * 60_000;
 const MODEL_WARMUP_BOOT_DELAY_MS = 320;
 const MODEL_WARMUP_STAGE_DELAY_MS = 140;
+const WINDOWS_RUN_REGISTRY_KEY = String.raw`HKCU\Software\Microsoft\Windows\CurrentVersion\Run`;
+const WINDOWS_RUN_VALUE_NAME = "Dictate";
+const AUTOSTART_LAUNCH_ARG = "--autostart";
 
 const VK_CONTROL = 0x11;
 const VK_SHIFT = 0x10;
@@ -90,6 +93,7 @@ type WarmupState = AppSnapshot["warmup"];
 const runtimeProbeCache = new Map<string, boolean>();
 const hfXetProbeCache = new Map<string, boolean>();
 const hfXetInstallInFlight = new Map<string, Promise<void>>();
+const isAutoStartLaunch = process.argv.includes(AUTOSTART_LAUNCH_ARG);
 
 function probeSidecarCudaAvailability(
 	pythonBin: string,
@@ -196,6 +200,98 @@ type ResolvedSidecarRuntime = {
 function ensureDirectory(path: string): string {
 	mkdirSync(path, { recursive: true });
 	return path;
+}
+
+function formatSpawnSyncOutput(result: ReturnType<typeof spawnSync>): string {
+	return `${result.stdout ?? ""}\n${result.stderr ?? ""}`.trim();
+}
+
+function resolveWindowsLauncherPath(): string {
+	const candidates = [
+		join(process.cwd(), "launcher.exe"),
+		join(process.cwd(), "launcher"),
+		join(process.cwd(), "bin", "launcher.exe"),
+		join(process.cwd(), "bin", "launcher"),
+	];
+
+	for (const candidate of candidates) {
+		if (existsSync(candidate)) {
+			return candidate;
+		}
+	}
+
+	throw new Error(
+		`Could not locate the launcher executable from ${process.cwd()}.`,
+	);
+}
+
+function buildWindowsAutostartCommand(): string {
+	const launcherPath = resolveWindowsLauncherPath().replace(/"/g, '""');
+	return `"${launcherPath}" ${AUTOSTART_LAUNCH_ARG}`;
+}
+
+function applyLaunchOnStartupPreference(enabled: boolean): void {
+	if (process.platform !== "win32") {
+		if (enabled) {
+			throw new Error("Launch on startup currently supports Windows only.");
+		}
+		return;
+	}
+
+	if (enabled) {
+		const result = spawnSync(
+			"reg.exe",
+			[
+				"add",
+				WINDOWS_RUN_REGISTRY_KEY,
+				"/v",
+				WINDOWS_RUN_VALUE_NAME,
+				"/t",
+				"REG_SZ",
+				"/d",
+				buildWindowsAutostartCommand(),
+				"/f",
+			],
+			{
+				encoding: "utf8",
+				windowsHide: true,
+			},
+		);
+		if (result.error) {
+			throw result.error;
+		}
+		if (result.status !== 0) {
+			throw new Error(
+				formatSpawnSyncOutput(result) ||
+					"Failed to enable launch on startup in the Windows registry.",
+			);
+		}
+		return;
+	}
+
+	const result = spawnSync(
+		"reg.exe",
+		["delete", WINDOWS_RUN_REGISTRY_KEY, "/v", WINDOWS_RUN_VALUE_NAME, "/f"],
+		{
+			encoding: "utf8",
+			windowsHide: true,
+		},
+	);
+	if (result.error) {
+		throw result.error;
+	}
+	if (result.status !== 0) {
+		const output = formatSpawnSyncOutput(result).toLowerCase();
+		if (
+			!output.includes("unable to find") &&
+			!output.includes("unable to find the specified registry key or value")
+		) {
+			throw new Error(
+				output ||
+					"Failed to disable launch on startup in the Windows registry.",
+			);
+		}
+	}
 }
 
 function migrateLegacyHfCache(hfHubDir: string): void {
@@ -464,6 +560,7 @@ const sidecar = new SidecarClient(
 let mainWindow: BrowserWindow | null = null;
 let pillWindow: BrowserWindow | null = null;
 let trayRef: Tray | null = null;
+let mainViewUrl: string | null = null;
 let shuttingDown = false;
 let hidePillTimer: ReturnType<typeof setTimeout> | null = null;
 let recordingTicker: ReturnType<typeof setInterval> | null = null;
@@ -1978,6 +2075,25 @@ function createWindowRpc(windowName: "main" | "pill") {
 							}
 							await applyAccelerationMode(merged.accelerationMode);
 						}
+						if (previous.launchOnStartup !== merged.launchOnStartup) {
+							try {
+								applyLaunchOnStartupPreference(merged.launchOnStartup);
+							} catch (error) {
+								storage.updateSettings({
+									launchOnStartup: previous.launchOnStartup,
+								});
+								const message =
+									error instanceof Error
+										? error.message
+										: "Unknown startup registration error.";
+								await sendToast({
+									type: "error",
+									title: "Launch on startup failed",
+									message,
+								});
+								throw error;
+							}
+						}
 						await broadcastSnapshot();
 						return merged;
 					}),
@@ -2051,7 +2167,7 @@ function createTray(): Tray {
 	appTray.on("tray-clicked", (event: unknown) => {
 		const action = (event as { data?: { action?: string } }).data?.action;
 		if (action === "open") {
-			mainWindow?.focus();
+			focusOrCreateMainWindow();
 			return;
 		}
 
@@ -2072,6 +2188,46 @@ function createTray(): Tray {
 	});
 
 	return appTray;
+}
+
+function createMainWindow(viewUrl: string): BrowserWindow {
+	const windowRef = new BrowserWindow({
+		title: "Dictate",
+		url: withViewQuery(viewUrl, "main"),
+		rpc: mainRpc,
+		titleBarStyle: "hidden",
+		frame: {
+			width: 1024,
+			height: 760,
+			x: 160,
+			y: 100,
+		},
+	});
+
+	windowRef.on("close", () => {
+		if (mainWindow?.id === windowRef.id) {
+			mainWindow = null;
+		}
+	});
+
+	return windowRef;
+}
+
+function focusOrCreateMainWindow(): void {
+	if (mainWindow) {
+		if (mainWindow.isMinimized()) {
+			mainWindow.unminimize();
+		}
+		mainWindow.focus();
+		return;
+	}
+
+	if (!mainViewUrl) {
+		console.error("[window] cannot create main window before bootstrap.");
+		return;
+	}
+
+	mainWindow = createMainWindow(mainViewUrl);
 }
 
 function createPillWindow(mainUrl: string): BrowserWindow {
@@ -2103,23 +2259,26 @@ function createPillWindow(mainUrl: string): BrowserWindow {
 }
 
 async function bootstrap(): Promise<void> {
-	const viewUrl = await getMainViewUrl();
-	mainWindow = new BrowserWindow({
-		title: "Dictate",
-		url: withViewQuery(viewUrl, "main"),
-		rpc: mainRpc,
-		titleBarStyle: "hidden",
-		frame: {
-			width: 1024,
-			height: 760,
-			x: 160,
-			y: 100,
-		},
-	});
-	pillWindow = createPillWindow(viewUrl);
+	mainViewUrl = await getMainViewUrl();
+	if (!isAutoStartLaunch) {
+		mainWindow = createMainWindow(mainViewUrl);
+	} else {
+		console.log(
+			"[startup] autostart launch detected; main window stays hidden.",
+		);
+	}
+	pillWindow = createPillWindow(mainViewUrl);
 	trayRef = createTray();
 
 	const settings = storage.getSettings();
+	try {
+		applyLaunchOnStartupPreference(settings.launchOnStartup);
+	} catch (error) {
+		console.error(
+			"[startup] failed to sync launch-on-startup preference:",
+			error instanceof Error ? error.message : error,
+		);
+	}
 	registerGlobalHotkey(settings.hotkey || FALLBACK_HOTKEY);
 	const managedRuntimes = [
 		sidecarVenvLegacyPython,
