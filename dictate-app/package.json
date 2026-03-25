@@ -1,7 +1,29 @@
 {
 	"name": "dictate-app",
-	"version": "1.0.0",
+	"version": "0.1.0",
 	"description": "Dictate desktop MVP (ElectroBun + React + Python sidecar)",
+	"license": "GPL-3.0-only",
+	"homepage": "https://github.com/siddhantparadox/dictate#readme",
+	"bugs": {
+		"url": "https://github.com/siddhantparadox/dictate/issues"
+	},
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/siddhantparadox/dictate.git"
+	},
+	"keywords": [
+		"dictation",
+		"speech-to-text",
+		"transcription",
+		"voice-typing",
+		"desktop",
+		"electrobun",
+		"bun",
+		"react",
+		"asr",
+		"nvidia",
+		"moonshine"
+	],
 	"scripts": {
 		"start": "vite build && electrobun dev",
 		"dev": "electrobun dev --watch",
