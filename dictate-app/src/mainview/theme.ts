@@ -13,9 +13,9 @@ function isThemePreference(
 function readStoredPreference(): ThemePreference {
 	try {
 		const stored = window.localStorage.getItem(STORAGE_KEY);
-		return isThemePreference(stored) ? stored : "system";
+		return isThemePreference(stored) ? stored : "light";
 	} catch {
-		return "system";
+		return "light";
 	}
 }
 

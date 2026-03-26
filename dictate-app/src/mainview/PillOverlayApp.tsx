@@ -129,22 +129,22 @@ function PillOverlayApp() {
 
 				{state === "transcribing" ? (
 					<>
-						<Loader2 className="h-4 w-4 animate-spin text-sky-600" />
+						<Loader2 className="h-4 w-4 animate-spin" />
 						<span className="pill-label">Transcribing</span>
 					</>
 				) : null}
 
 				{state === "success" ? (
 					<>
-						<CheckCircle2 className="h-4 w-4 text-emerald-600" />
-						<span className="pill-label">Pasted</span>
+						<CheckCircle2 className="h-4 w-4" />
+						<span className="pill-label">Copied to clipboard</span>
 					</>
 				) : null}
 
 				{state === "failure" ? (
 					<>
-						<TriangleAlert className="h-4 w-4 text-rose-600" />
-						<span className="pill-label">Failed, copied to clipboard</span>
+						<TriangleAlert className="h-4 w-4" />
+						<span className="pill-label">Mic error</span>
 					</>
 				) : null}
 			</div>

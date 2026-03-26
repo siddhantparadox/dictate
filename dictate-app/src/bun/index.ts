@@ -2190,18 +2190,64 @@ function createTray(): Tray {
 	return appTray;
 }
 
+function syncWindowFrameToContentBounds(
+	windowRef: BrowserWindow,
+	minimumWidth: number,
+	minimumHeight: number,
+): void {
+	const { x, y, width, height } = windowRef.getFrame();
+	const nextWidth = Math.max(width, minimumWidth);
+	const nextHeight = Math.max(height, minimumHeight);
+
+	windowRef.setFrame(x, y, nextWidth, nextHeight + 1);
+	setTimeout(() => {
+		windowRef.setFrame(x, y, nextWidth, nextHeight);
+		windowRef.webview.executeJavascript(
+			"window.dispatchEvent(new Event('resize'));",
+		);
+	}, 0);
+}
+
 function createMainWindow(viewUrl: string): BrowserWindow {
+	const minimumWidth = 980;
+	const minimumHeight = 820;
 	const windowRef = new BrowserWindow({
 		title: "Dictate",
 		url: withViewQuery(viewUrl, "main"),
 		rpc: mainRpc,
-		titleBarStyle: "hidden",
 		frame: {
-			width: 1024,
-			height: 760,
+			width: 1160,
+			height: 900,
 			x: 160,
 			y: 100,
 		},
+	});
+
+	// On Windows with native chrome, force one post-create frame sync so the
+	// default BrowserView does not wait for a manual resize before using the
+	// correct client bounds.
+	if (process.platform === "win32") {
+		setTimeout(() => {
+			syncWindowFrameToContentBounds(windowRef, minimumWidth, minimumHeight);
+		}, 0);
+
+		const resyncContentBounds = () => {
+			syncWindowFrameToContentBounds(windowRef, minimumWidth, minimumHeight);
+		};
+
+		windowRef.webview.on("dom-ready", () => {
+			setTimeout(resyncContentBounds, 0);
+			setTimeout(resyncContentBounds, 120);
+		});
+	}
+
+	windowRef.on("resize", () => {
+		const frame = windowRef.getFrame();
+		const nextWidth = Math.max(frame.width, minimumWidth);
+		const nextHeight = Math.max(frame.height, minimumHeight);
+		if (nextWidth !== frame.width || nextHeight !== frame.height) {
+			windowRef.setSize(nextWidth, nextHeight);
+		}
 	});
 
 	windowRef.on("close", () => {
