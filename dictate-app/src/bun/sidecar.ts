@@ -65,7 +65,7 @@ interface SidecarMicrophoneLevelEvent {
 
 interface SidecarClientOptions {
 	onPrepareModelProgress?: (event: {
-		modelId: ModelId;
+		modelId: LocalModelId;
 		stage: "queued" | "downloading" | "loading" | "installed" | "error";
 		message: string;
 		progress: number | null;

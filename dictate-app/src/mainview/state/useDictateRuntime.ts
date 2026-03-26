@@ -1,6 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { rpcClient } from "@/mainview/rpc-client";
-import type { GroqModelId, LocalModelId, ModelId } from "@/shared/models";
+import type {
+	DeepgramModelId,
+	GroqModelId,
+	LocalModelId,
+	ModelId,
+} from "@/shared/models";
 import type { AppSnapshot, ToastPayload } from "@/shared/rpc";
 
 const SNAPSHOT_RETRY_BASE_MS = 250;
@@ -29,6 +34,8 @@ export interface UseDictateRuntimeResult {
 	isDeletingModelId: ModelId | null;
 	isConfiguringGroq: boolean;
 	isRemovingGroq: boolean;
+	isConfiguringDeepgram: boolean;
+	isRemovingDeepgram: boolean;
 	isUpdatingSettings: boolean;
 	isLoading: boolean;
 	runtimeError: RuntimeErrorState;
@@ -40,6 +47,11 @@ export interface UseDictateRuntimeResult {
 		modelId: GroqModelId,
 	) => Promise<void>;
 	removeGroqProvider: () => Promise<void>;
+	configureDeepgramProvider: (
+		apiKey: string,
+		modelId: DeepgramModelId,
+	) => Promise<void>;
+	removeDeepgramProvider: () => Promise<void>;
 	installAccelerationRuntime: (mode: "cuda") => Promise<boolean>;
 	startDictation: () => Promise<void>;
 	updateSetting: (
@@ -66,6 +78,8 @@ export function useDictateRuntime(): UseDictateRuntimeResult {
 	);
 	const [isConfiguringGroq, setIsConfiguringGroq] = useState(false);
 	const [isRemovingGroq, setIsRemovingGroq] = useState(false);
+	const [isConfiguringDeepgram, setIsConfiguringDeepgram] = useState(false);
+	const [isRemovingDeepgram, setIsRemovingDeepgram] = useState(false);
 	const [isUpdatingSettings, setIsUpdatingSettings] = useState(false);
 
 	useEffect(() => {
@@ -318,6 +332,38 @@ export function useDictateRuntime(): UseDictateRuntimeResult {
 		}
 	}, []);
 
+	const configureDeepgramProvider = useCallback(
+		async (apiKey: string, modelId: DeepgramModelId): Promise<void> => {
+			setIsConfiguringDeepgram(true);
+			try {
+				const snapshot = await rpcClient.configureDeepgramProvider(
+					apiKey,
+					modelId,
+				);
+				setSnapshot(snapshot);
+			} catch (error) {
+				void rpcClient.reportRendererError("configureDeepgramProvider", error);
+				throw error;
+			} finally {
+				setIsConfiguringDeepgram(false);
+			}
+		},
+		[],
+	);
+
+	const removeDeepgramProvider = useCallback(async (): Promise<void> => {
+		setIsRemovingDeepgram(true);
+		try {
+			const snapshot = await rpcClient.removeDeepgramProvider();
+			setSnapshot(snapshot);
+		} catch (error) {
+			void rpcClient.reportRendererError("removeDeepgramProvider", error);
+			throw error;
+		} finally {
+			setIsRemovingDeepgram(false);
+		}
+	}, []);
+
 	const startDictation = useCallback(async (): Promise<void> => {
 		setIsDictating(true);
 		try {
@@ -354,6 +400,8 @@ export function useDictateRuntime(): UseDictateRuntimeResult {
 		isDeletingModelId,
 		isConfiguringGroq,
 		isRemovingGroq,
+		isConfiguringDeepgram,
+		isRemovingDeepgram,
 		isUpdatingSettings,
 		isLoading: !snapshot || !settings,
 		runtimeError,
@@ -362,6 +410,8 @@ export function useDictateRuntime(): UseDictateRuntimeResult {
 		deleteModel,
 		configureGroqProvider,
 		removeGroqProvider,
+		configureDeepgramProvider,
+		removeDeepgramProvider,
 		installAccelerationRuntime,
 		startDictation,
 		updateSetting,

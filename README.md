@@ -12,7 +12,7 @@ Dictate is a Windows-first desktop app built with:
 - React for the app UI
 - A Python sidecar for speech recognition
 - Local ASR models from Moonshine and NVIDIA
-- Optional cloud transcription through Groq with a bring-your-own API key flow
+- Optional cloud transcription through Groq and Deepgram with bring-your-own API key flows
 
 The app is designed around one primary interaction:
 
@@ -25,7 +25,7 @@ The app is designed around one primary interaction:
 ## Current Scope
 
 - Local, on-device transcription
-- Optional Groq cloud transcription with saved local API key configuration
+- Optional Groq and Deepgram cloud transcription with saved local API key configuration
 - Global hotkey: `Ctrl+Shift`
 - Live pill overlay while recording
 - Model download, warm-up, selection, and deletion
@@ -42,7 +42,7 @@ The app is designed around one primary interaction:
 2. Go to `Models`.
 3. Choose `Local` or `Cloud`.
 4. For `Local`, download the model you want to use.
-5. For `Cloud`, connect Groq with your API key and select a Groq Whisper model.
+5. For `Cloud`, connect Groq or Deepgram with your API key and select a cloud model.
 6. Keep `ASR Acceleration` on `Auto` unless you specifically want to force `CPU` or `CUDA`.
 7. Select the model you want as default.
 
@@ -50,6 +50,12 @@ Groq setup:
 
 - Get an API key from [Groq API Keys](https://console.groq.com/keys/)
 - Groq docs overview: [Groq Docs](https://console.groq.com/docs/overview)
+
+Deepgram setup:
+
+- Create a key in [Deepgram Console](https://console.deepgram.com/)
+- Deepgram docs home: [Deepgram Docs](https://developers.deepgram.com/home)
+- New Deepgram accounts currently include `$200` of free credit: [Deepgram Pricing](https://deepgram.com/pricing)
 
 ### Dictation Flow
 
@@ -63,7 +69,7 @@ Groq setup:
 
 - `Overview`: current model, runtime state, latest transcript, warnings, and readiness
 - `History`: recent transcription jobs and outcomes
-- `Models`: local vs cloud model source, install state, Groq connection state, and select/delete actions
+- `Models`: local vs cloud model source, install state, Groq and Deepgram connection state, and select/delete actions
 - `Settings`: acceleration mode, appearance, paste behavior, and debug flags
 
 ## Models
@@ -79,12 +85,14 @@ Groq setup:
 
 ### Cloud Models
 
-Groq cloud transcription is optional and uses your own Groq API key.
+Cloud transcription is optional and uses your own provider API key.
 
 | Provider | Model | Notes |
 | --- | --- | --- |
 | `Groq` | `whisper-large-v3-turbo` | Recommended default for cloud dictation: faster and lower cost |
 | `Groq` | `whisper-large-v3` | Higher accuracy option with translation support |
+| `Deepgram` | `nova-3` | Recommended Deepgram default for prerecorded BYOK dictation |
+| `Deepgram` | `nova-2` | Deepgram compatibility fallback |
 
 ## Runtime Modes
 
@@ -172,7 +180,7 @@ You can override the root with:
 DICTATE_HOME
 ```
 
-App settings and transcription history are stored in the app user data directory in a local SQLite database. Groq BYO-key configuration is stored separately under `.dictateapp\providers.json`.
+App settings and transcription history are stored in the app user data directory in a local SQLite database. Groq and Deepgram BYO-key configuration is stored separately under `.dictateapp\providers.json`.
 
 ## Repository Layout
 

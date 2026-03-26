@@ -91,7 +91,7 @@ export function OverviewSection({
 		{
 			label: "Engine",
 			value: selectedCloudModel
-				? "Groq Cloud"
+				? `${selectedModelProviderLabel ?? "Cloud"} Cloud`
 				: selectedModelRuntime
 					? engineLabel(selectedModelRuntime.activeEngine)
 					: "Unavailable",
@@ -208,7 +208,7 @@ export function OverviewSection({
 								{selectedCloudModel
 									? selectedModelReady
 										? "Connected"
-										: "Connect Groq"
+										: `Connect ${selectedModelProviderLabel ?? "Cloud"}`
 									: selectedModelStatus
 										? modelStatusLabel(selectedModelStatus, true)
 										: "Idle"}

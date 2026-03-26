@@ -160,7 +160,7 @@ export function SettingsSection({
 							</div>
 							<span className="settings-value">
 								{selectedCloudModel
-									? `${selectedModelProviderLabel ?? "Groq"} Cloud`
+									? `${selectedModelProviderLabel ?? "Cloud"} Cloud`
 									: selectedModelRuntime
 										? `${engineLabel(selectedModelRuntime.activeEngine)} • ${selectedModelRuntime.quantizationLabel}`
 										: snapshot.hardware.asrRuntime.toUpperCase()}
@@ -240,7 +240,7 @@ export function SettingsSection({
 									<p className="surface-label">Engine</p>
 									<p className="settings-metric-value">
 										{selectedCloudModel
-											? `${selectedModelProviderLabel ?? "Groq"} Cloud`
+											? `${selectedModelProviderLabel ?? "Cloud"} Cloud`
 											: selectedModelRuntime
 												? engineLabel(selectedModelRuntime.activeEngine)
 												: snapshot.hardware.asrRuntime.toUpperCase()}

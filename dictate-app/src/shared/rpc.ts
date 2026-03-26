@@ -1,5 +1,6 @@
 import type {
 	CudaGraphsStatus,
+	DeepgramModelId,
 	GroqModelId,
 	InferenceEngine,
 	LocalModelCatalogItem,
@@ -82,6 +83,13 @@ export interface GroqProviderSnapshot {
 	lastVerifiedAt: string | null;
 }
 
+export interface DeepgramProviderSnapshot {
+	configured: boolean;
+	maskedApiKey: string | null;
+	selectedModelId: DeepgramModelId | null;
+	lastVerifiedAt: string | null;
+}
+
 export interface AppSnapshot {
 	pillState: RecordingPillState;
 	pill: {
@@ -126,6 +134,7 @@ export interface AppSnapshot {
 	>;
 	cloudProviders: {
 		groq: GroqProviderSnapshot;
+		deepgram: DeepgramProviderSnapshot;
 	};
 	sidecarStatus: "ready" | "starting" | "stopped" | "error";
 	lastJob: JobRecord | null;
@@ -199,6 +208,14 @@ export type DictateRPC = {
 				response: AppSnapshot;
 			};
 			removeGroqProvider: {
+				params: NoParams;
+				response: AppSnapshot;
+			};
+			configureDeepgramProvider: {
+				params: { apiKey: string; modelId: DeepgramModelId };
+				response: AppSnapshot;
+			};
+			removeDeepgramProvider: {
 				params: NoParams;
 				response: AppSnapshot;
 			};

@@ -3,11 +3,19 @@ import { type Dispatch, type SetStateAction, useState } from "react";
 import { Input } from "@/components/ui/input";
 import type { UseDictateRuntimeResult } from "@/mainview/state/useDictateRuntime";
 import {
+	type CloudModelId,
+	type CloudProviderId,
+	DEEPGRAM_MODEL_OPTIONS,
+	DEFAULT_DEEPGRAM_MODEL_ID,
 	DEFAULT_GROQ_MODEL_ID,
+	type DeepgramModelId,
 	GROQ_MODEL_OPTIONS,
 	type GroqModelId,
+	getCloudProviderIdForModel,
+	getCloudProviderLabel,
 	getModelLabel,
-	isGroqModelId,
+	getModelProviderLabel,
+	isCloudModelId,
 	type LocalModelId,
 } from "@/shared/models";
 import type { AppSnapshot } from "@/shared/rpc";
@@ -33,11 +41,15 @@ interface ModelsSectionProps {
 		| "isSelectingModelId"
 		| "isConfiguringGroq"
 		| "isRemovingGroq"
+		| "isConfiguringDeepgram"
+		| "isRemovingDeepgram"
 		| "downloadModel"
 		| "selectModel"
 		| "deleteModel"
 		| "configureGroqProvider"
 		| "removeGroqProvider"
+		| "configureDeepgramProvider"
+		| "removeDeepgramProvider"
 	>;
 	snapshot: AppSnapshot;
 	settings: AppSnapshot["settings"];
@@ -46,8 +58,192 @@ interface ModelsSectionProps {
 	setConfirmDeleteModelId: Dispatch<SetStateAction<LocalModelId | null>>;
 }
 
+interface ProviderSetupCardProps<TModelId extends CloudModelId> {
+	providerLabel: string;
+	copy: string;
+	configured: boolean;
+	maskedApiKey: string | null;
+	selectedModelId: TModelId | null;
+	lastVerifiedAt: string | null;
+	modelOptions: Array<{
+		id: TModelId;
+		label: string;
+		recommended: boolean;
+	}>;
+	apiKey: string;
+	setApiKey: Dispatch<SetStateAction<string>>;
+	pendingModelId: TModelId;
+	setPendingModelId: Dispatch<SetStateAction<TModelId>>;
+	showEditor: boolean;
+	setShowEditor: Dispatch<SetStateAction<boolean>>;
+	error: string | null;
+	setError: Dispatch<SetStateAction<string | null>>;
+	isSaving: boolean;
+	isRemoving: boolean;
+	saveLabel: string;
+	removeLabel: string;
+	onSelect?: () => void;
+	onSave: () => Promise<void>;
+	onRemove: () => Promise<void>;
+}
+
 function formatError(error: unknown): string {
 	return error instanceof Error ? error.message : "Unknown error.";
+}
+
+function ProviderSetupCard<TModelId extends CloudModelId>({
+	providerLabel,
+	copy,
+	configured,
+	maskedApiKey,
+	selectedModelId,
+	lastVerifiedAt,
+	modelOptions,
+	apiKey,
+	setApiKey,
+	pendingModelId,
+	setPendingModelId,
+	showEditor,
+	setShowEditor,
+	error,
+	setError,
+	isSaving,
+	isRemoving,
+	saveLabel,
+	removeLabel,
+	onSelect,
+	onSave,
+	onRemove,
+}: ProviderSetupCardProps<TModelId>) {
+	return (
+		<div className="cloud-provider-card">
+			<div className="cloud-provider-head">
+				<div>
+					<p className="section-eyebrow">Provider</p>
+					<h2 className="cloud-provider-title">{providerLabel}</h2>
+					<p className="section-copy compact cloud-provider-copy">{copy}</p>
+				</div>
+				<span className={`status-pill ${configured ? "ready" : "warning"}`}>
+					{configured ? "Connected" : "Not connected"}
+				</span>
+			</div>
+
+			<div className="cloud-provider-meta">
+				<div className="cloud-provider-meta-card">
+					<p className="surface-label">Saved key</p>
+					<p className="cloud-provider-meta-value">{maskedApiKey ?? "None"}</p>
+				</div>
+				<div className="cloud-provider-meta-card">
+					<p className="surface-label">Selected model</p>
+					<p className="cloud-provider-meta-value">
+						{selectedModelId ? getModelLabel(selectedModelId) : "Not set"}
+					</p>
+				</div>
+				<div className="cloud-provider-meta-card">
+					<p className="surface-label">Last verified</p>
+					<p className="cloud-provider-meta-value">
+						{lastVerifiedAt ? formatTimestamp(lastVerifiedAt) : "Never"}
+					</p>
+				</div>
+			</div>
+
+			<div className="cloud-provider-actions">
+				<button
+					type="button"
+					className="quiet-button"
+					onClick={() => {
+						onSelect?.();
+						setError(null);
+						setPendingModelId(
+							selectedModelId ?? modelOptions[0]?.id ?? pendingModelId,
+						);
+						setShowEditor((current) => !current || !configured);
+					}}
+				>
+					{configured ? "Replace key" : "Add API key"}
+				</button>
+				<button
+					type="button"
+					className="quiet-button destructive"
+					disabled={!configured || isRemoving}
+					onClick={() => void onRemove()}
+				>
+					{isRemoving ? "Removing..." : removeLabel}
+				</button>
+			</div>
+
+			{showEditor ? (
+				<div className="cloud-provider-editor">
+					<div className="cloud-provider-field">
+						<label
+							className="surface-label"
+							htmlFor={`${providerLabel.toLowerCase()}-api-key`}
+						>
+							{providerLabel} API key
+						</label>
+						<Input
+							id={`${providerLabel.toLowerCase()}-api-key`}
+							type="password"
+							autoComplete="off"
+							value={apiKey}
+							placeholder={
+								configured
+									? "Paste a new key to replace the saved one"
+									: "Paste your API key"
+							}
+							onChange={(event) => setApiKey(event.target.value)}
+						/>
+						<p className="cloud-provider-help">
+							The key is stored locally on this device so Dictate can call{" "}
+							{providerLabel} on your behalf.
+						</p>
+					</div>
+
+					<div className="cloud-provider-field">
+						<p className="surface-label">Model to save</p>
+						<div className="cloud-save-model-list">
+							{modelOptions.map((model) => (
+								<button
+									type="button"
+									key={model.id}
+									className={`cloud-save-model-button ${
+										pendingModelId === model.id ? "active" : ""
+									}`}
+									onClick={() => setPendingModelId(model.id)}
+								>
+									<span className="cloud-save-model-title">{model.label}</span>
+									{model.recommended ? (
+										<span className="meta-chip active subtle">Recommended</span>
+									) : null}
+								</button>
+							))}
+						</div>
+					</div>
+
+					<div className="cloud-provider-save-row">
+						<button
+							type="button"
+							className="quiet-button"
+							disabled={isSaving || apiKey.trim().length === 0}
+							onClick={() => void onSave()}
+						>
+							{isSaving ? (
+								<>
+									<Loader2 className="h-4 w-4 animate-spin" />
+									<span>{saveLabel}</span>
+								</>
+							) : (
+								saveLabel
+							)}
+						</button>
+						{error ? (
+							<p className="panel-note warning cloud-provider-error">{error}</p>
+						) : null}
+					</div>
+				</div>
+			) : null}
+		</div>
+	);
 }
 
 export function ModelsSection({
@@ -59,19 +255,46 @@ export function ModelsSection({
 	setConfirmDeleteModelId,
 }: ModelsSectionProps) {
 	const groq = snapshot.cloudProviders.groq;
+	const deepgram = snapshot.cloudProviders.deepgram;
 	const [activeSource, setActiveSource] = useState<"local" | "cloud">(() =>
-		isGroqModelId(settings.defaultModelId) ? "cloud" : "local",
+		isCloudModelId(settings.defaultModelId) ? "cloud" : "local",
 	);
+	const [activeCloudProvider, setActiveCloudProvider] =
+		useState<CloudProviderId>(() => {
+			const defaultProvider = getCloudProviderIdForModel(
+				settings.defaultModelId,
+			);
+			if (defaultProvider) {
+				return defaultProvider;
+			}
+			if (groq.configured && !deepgram.configured) {
+				return "groq";
+			}
+			if (deepgram.configured && !groq.configured) {
+				return "deepgram";
+			}
+			return "groq";
+		});
+
 	const [groqApiKey, setGroqApiKey] = useState("");
 	const [pendingGroqModelId, setPendingGroqModelId] = useState<GroqModelId>(
 		groq.selectedModelId ?? DEFAULT_GROQ_MODEL_ID,
 	);
-	const [showGroqEditor, setShowGroqEditor] = useState(!groq.configured);
+	const [showGroqEditor, setShowGroqEditor] = useState(false);
 	const [groqError, setGroqError] = useState<string | null>(null);
+
+	const [deepgramApiKey, setDeepgramApiKey] = useState("");
+	const [pendingDeepgramModelId, setPendingDeepgramModelId] =
+		useState<DeepgramModelId>(
+			deepgram.selectedModelId ?? DEFAULT_DEEPGRAM_MODEL_ID,
+		);
+	const [showDeepgramEditor, setShowDeepgramEditor] = useState(false);
+	const [deepgramError, setDeepgramError] = useState<string | null>(null);
 
 	const handleSaveGroq = async () => {
 		setGroqError(null);
 		try {
+			setActiveCloudProvider("groq");
 			await runtime.configureGroqProvider(groqApiKey, pendingGroqModelId);
 			setGroqApiKey("");
 			setShowGroqEditor(false);
@@ -87,11 +310,50 @@ export function ModelsSection({
 			await runtime.removeGroqProvider();
 			setGroqApiKey("");
 			setPendingGroqModelId(DEFAULT_GROQ_MODEL_ID);
-			setShowGroqEditor(true);
+			setShowGroqEditor(false);
+			setActiveCloudProvider(deepgram.configured ? "deepgram" : "groq");
 		} catch (error) {
 			setGroqError(formatError(error));
 		}
 	};
+
+	const handleSaveDeepgram = async () => {
+		setDeepgramError(null);
+		try {
+			setActiveCloudProvider("deepgram");
+			await runtime.configureDeepgramProvider(
+				deepgramApiKey,
+				pendingDeepgramModelId,
+			);
+			setDeepgramApiKey("");
+			setShowDeepgramEditor(false);
+			setActiveSource("cloud");
+		} catch (error) {
+			setDeepgramError(formatError(error));
+		}
+	};
+
+	const handleRemoveDeepgram = async () => {
+		setDeepgramError(null);
+		try {
+			await runtime.removeDeepgramProvider();
+			setDeepgramApiKey("");
+			setPendingDeepgramModelId(DEFAULT_DEEPGRAM_MODEL_ID);
+			setShowDeepgramEditor(false);
+			setActiveCloudProvider(groq.configured ? "groq" : "deepgram");
+		} catch (error) {
+			setDeepgramError(formatError(error));
+		}
+	};
+
+	const connectedProviders = [groq.configured, deepgram.configured].filter(
+		Boolean,
+	).length;
+	const visibleCloudModels =
+		activeCloudProvider === "groq"
+			? GROQ_MODEL_OPTIONS
+			: DEEPGRAM_MODEL_OPTIONS;
+	const activeCloudProviderLabel = getCloudProviderLabel(activeCloudProvider);
 
 	return (
 		<div className="content-stack models-screen">
@@ -102,7 +364,7 @@ export function ModelsSection({
 						<span className="section-count">
 							{activeSource === "local"
 								? `${runtime.models.length} local`
-								: "Cloud"}
+								: `${connectedProviders}/2 connected`}
 						</span>
 					</div>
 					<p className="section-copy compact">
@@ -371,164 +633,132 @@ export function ModelsSection({
 				</section>
 			) : (
 				<section className="cloud-models-surface">
-					<div className="cloud-provider-card">
-						<div className="cloud-provider-head">
-							<div>
-								<p className="section-eyebrow">Provider</p>
-								<h2 className="cloud-provider-title">Groq</h2>
-								<p className="section-copy compact cloud-provider-copy">
-									Bring your own Groq API key to use Whisper cloud models
-									without downloading anything locally.
-								</p>
-							</div>
-							<span
-								className={`status-pill ${groq.configured ? "ready" : "warning"}`}
-							>
-								{groq.configured ? "Connected" : "Not connected"}
-							</span>
-						</div>
+					<div className="cloud-provider-grid">
+						<ProviderSetupCard
+							providerLabel="Groq"
+							copy="Bring your own Groq API key to use Whisper cloud models without downloading anything locally."
+							configured={groq.configured}
+							maskedApiKey={groq.maskedApiKey}
+							selectedModelId={groq.selectedModelId}
+							lastVerifiedAt={groq.lastVerifiedAt}
+							modelOptions={GROQ_MODEL_OPTIONS.map((model) => ({
+								id: model.id,
+								label: model.label,
+								recommended: model.recommended,
+							}))}
+							apiKey={groqApiKey}
+							setApiKey={setGroqApiKey}
+							pendingModelId={pendingGroqModelId}
+							setPendingModelId={setPendingGroqModelId}
+							showEditor={showGroqEditor}
+							setShowEditor={setShowGroqEditor}
+							error={groqError}
+							setError={setGroqError}
+							isSaving={runtime.isConfiguringGroq}
+							isRemoving={runtime.isRemovingGroq}
+							saveLabel="Save Groq"
+							removeLabel="Remove Groq"
+							onSelect={() => setActiveCloudProvider("groq")}
+							onSave={handleSaveGroq}
+							onRemove={handleRemoveGroq}
+						/>
 
-						<div className="cloud-provider-meta">
-							<div className="cloud-provider-meta-card">
-								<p className="surface-label">Saved key</p>
-								<p className="cloud-provider-meta-value">
-									{groq.maskedApiKey ?? "None"}
-								</p>
-							</div>
-							<div className="cloud-provider-meta-card">
-								<p className="surface-label">Selected Groq model</p>
-								<p className="cloud-provider-meta-value">
-									{groq.selectedModelId
-										? getModelLabel(groq.selectedModelId)
-										: "Not set"}
-								</p>
-							</div>
-							<div className="cloud-provider-meta-card">
-								<p className="surface-label">Last verified</p>
-								<p className="cloud-provider-meta-value">
-									{groq.lastVerifiedAt
-										? formatTimestamp(groq.lastVerifiedAt)
-										: "Never"}
-								</p>
-							</div>
-						</div>
+						<ProviderSetupCard
+							providerLabel="Deepgram"
+							copy="Bring your own Deepgram API key to use Nova cloud transcription with a simple prerecorded dictation flow."
+							configured={deepgram.configured}
+							maskedApiKey={deepgram.maskedApiKey}
+							selectedModelId={deepgram.selectedModelId}
+							lastVerifiedAt={deepgram.lastVerifiedAt}
+							modelOptions={DEEPGRAM_MODEL_OPTIONS.map((model) => ({
+								id: model.id,
+								label: model.label,
+								recommended: model.recommended,
+							}))}
+							apiKey={deepgramApiKey}
+							setApiKey={setDeepgramApiKey}
+							pendingModelId={pendingDeepgramModelId}
+							setPendingModelId={setPendingDeepgramModelId}
+							showEditor={showDeepgramEditor}
+							setShowEditor={setShowDeepgramEditor}
+							error={deepgramError}
+							setError={setDeepgramError}
+							isSaving={runtime.isConfiguringDeepgram}
+							isRemoving={runtime.isRemovingDeepgram}
+							saveLabel="Save Deepgram"
+							removeLabel="Remove Deepgram"
+							onSelect={() => setActiveCloudProvider("deepgram")}
+							onSave={handleSaveDeepgram}
+							onRemove={handleRemoveDeepgram}
+						/>
+					</div>
 
-						<div className="cloud-provider-actions">
+					<div className="cloud-provider-toolbar">
+						<div className="cloud-provider-toolbar-copy">
+							<p className="surface-label">Model library</p>
+							<p className="cloud-provider-toolbar-text">
+								Show models for one provider at a time.
+							</p>
+						</div>
+						<div className="segmented-control cloud-provider-toggle">
 							<button
 								type="button"
-								className="quiet-button"
-								onClick={() => {
-									setGroqError(null);
-									setPendingGroqModelId(
-										groq.selectedModelId ?? DEFAULT_GROQ_MODEL_ID,
-									);
-									setShowGroqEditor((current) => !current || !groq.configured);
-								}}
+								className={
+									activeCloudProvider === "groq" ? "active" : undefined
+								}
+								onClick={() => setActiveCloudProvider("groq")}
 							>
-								{groq.configured ? "Replace key" : "Add API key"}
+								Groq
 							</button>
 							<button
 								type="button"
-								className="quiet-button destructive"
-								disabled={!groq.configured || runtime.isRemovingGroq}
-								onClick={() => void handleRemoveGroq()}
+								className={
+									activeCloudProvider === "deepgram" ? "active" : undefined
+								}
+								onClick={() => setActiveCloudProvider("deepgram")}
 							>
-								{runtime.isRemovingGroq ? "Removing..." : "Remove Groq"}
+								Deepgram
 							</button>
 						</div>
-
-						{showGroqEditor ? (
-							<div className="cloud-provider-editor">
-								<div className="cloud-provider-field">
-									<label className="surface-label" htmlFor="groq-api-key">
-										Groq API key
-									</label>
-									<Input
-										id="groq-api-key"
-										type="password"
-										autoComplete="off"
-										value={groqApiKey}
-										placeholder={
-											groq.configured
-												? "Paste a new key to replace the saved one"
-												: "gsk_..."
-										}
-										onChange={(event) => setGroqApiKey(event.target.value)}
-									/>
-									<p className="cloud-provider-help">
-										The key is stored locally on this device so Dictate can call
-										Groq on your behalf.
-									</p>
-								</div>
-
-								<div className="cloud-provider-field">
-									<p className="surface-label">Model to save</p>
-									<div className="cloud-save-model-list">
-										{GROQ_MODEL_OPTIONS.map((model) => (
-											<button
-												type="button"
-												key={model.id}
-												className={`cloud-save-model-button ${
-													pendingGroqModelId === model.id ? "active" : ""
-												}`}
-												onClick={() => setPendingGroqModelId(model.id)}
-											>
-												<span>{model.id}</span>
-												{model.recommended ? (
-													<span className="meta-chip active subtle">
-														Recommended
-													</span>
-												) : null}
-											</button>
-										))}
-									</div>
-								</div>
-
-								<div className="cloud-provider-save-row">
-									<button
-										type="button"
-										className="quiet-button"
-										disabled={
-											runtime.isConfiguringGroq ||
-											groqApiKey.trim().length === 0
-										}
-										onClick={() => void handleSaveGroq()}
-									>
-										{runtime.isConfiguringGroq ? (
-											<>
-												<Loader2 className="h-4 w-4 animate-spin" />
-												<span>Saving Groq</span>
-											</>
-										) : (
-											"Save Groq"
-										)}
-									</button>
-									{groqError ? (
-										<p className="panel-note warning cloud-provider-error">
-											{groqError}
-										</p>
-									) : null}
-								</div>
-							</div>
-						) : null}
 					</div>
 
 					<div className="cloud-provider-note">
 						<p className="surface-label">Privacy</p>
 						<p className="cloud-provider-note-copy">
-							Audio is sent to Groq for transcription when a Groq model is
-							active.
+							Audio is sent to the active cloud provider when a cloud model is
+							selected. Groq uses Whisper transcription. Deepgram uses Nova
+							pre-recorded transcription with language detection.
 						</p>
 					</div>
 
+					<div className="cloud-model-section-head">
+						<div>
+							<p className="surface-label">Cloud models</p>
+							<p className="cloud-provider-toolbar-text">
+								{activeCloudProviderLabel} options for Dictate.
+							</p>
+						</div>
+					</div>
+
 					<div className="cloud-model-grid">
-						{GROQ_MODEL_OPTIONS.map((model) => {
+						{visibleCloudModels.map((model) => {
+							const providerLabel = getCloudProviderLabel(model.provider);
+							const providerConfigured =
+								model.provider === "groq"
+									? groq.configured
+									: deepgram.configured;
+							const providerBusy =
+								model.provider === "groq"
+									? runtime.isConfiguringGroq || runtime.isRemovingGroq
+									: runtime.isConfiguringDeepgram || runtime.isRemovingDeepgram;
 							const isActive = settings.defaultModelId === model.id;
-							const isSelectedInSetup = pendingGroqModelId === model.id;
+							const isSelectedInSetup =
+								model.provider === "groq"
+									? pendingGroqModelId === model.id
+									: pendingDeepgramModelId === model.id;
 							const canActivate =
-								groq.configured &&
-								!runtime.isConfiguringGroq &&
-								!runtime.isRemovingGroq &&
+								providerConfigured &&
+								!providerBusy &&
 								runtime.isSelectingModelId === null;
 
 							return (
@@ -552,47 +782,66 @@ export function ModelsSection({
 												) : null}
 											</div>
 											<p className="model-subtitle">
-												{model.languageLabel} • {model.pricingLabel}
+												{model.languageLabel} • {model.highlightLabel}
 											</p>
 										</div>
-										<span className="model-fit-tag ready">Cloud</span>
+										<span className="model-fit-tag ready">{providerLabel}</span>
 									</div>
 
 									<p className="model-notes">{model.notes}</p>
 
 									<div className="cloud-model-meta">
-										<span className="meta-chip">{model.throughputLabel}</span>
-										{model.translationSupported ? (
-											<span className="meta-chip">Translation</span>
-										) : (
-											<span className="meta-chip">Dictation</span>
-										)}
+										{model.metaTags.map((tag) => (
+											<span key={tag} className="meta-chip">
+												{tag}
+											</span>
+										))}
 									</div>
 
 									<div className="cloud-model-actions">
 										<button
 											type="button"
 											className="model-action-link primary"
-											disabled={!canActivate || isActive}
+											disabled={
+												providerConfigured ? !canActivate || isActive : false
+											}
 											onClick={() => {
-												setGroqError(null);
-												setPendingGroqModelId(model.id);
+												setActiveCloudProvider(model.provider);
+												if (!providerConfigured) {
+													if (model.provider === "groq") {
+														setGroqError(null);
+														setPendingGroqModelId(model.id);
+														setShowGroqEditor(true);
+													} else {
+														setDeepgramError(null);
+														setPendingDeepgramModelId(model.id);
+														setShowDeepgramEditor(true);
+													}
+													return;
+												}
+
 												void runtime.selectModel(model.id).catch((error) => {
-													setGroqError(formatError(error));
+													if (model.provider === "groq") {
+														setGroqError(formatError(error));
+													} else {
+														setDeepgramError(formatError(error));
+													}
 												});
 											}}
 										>
-											{runtime.isSelectingModelId === model.id
-												? "Switching"
-												: isActive
-													? "Active"
-													: "Use this"}
+											{providerConfigured
+												? runtime.isSelectingModelId === model.id
+													? "Switching"
+													: isActive
+														? "Active"
+														: "Use this"
+												: `Connect ${providerLabel}`}
 										</button>
-										{!groq.configured ? (
-											<span className="cloud-model-action-note">
-												Save a Groq key first
-											</span>
-										) : null}
+										<span className="cloud-model-action-note">
+											{providerConfigured
+												? `${getModelProviderLabel(model.id) ?? providerLabel} ready`
+												: `Save a ${providerLabel} key first`}
+										</span>
 									</div>
 								</article>
 							);

@@ -21,10 +21,14 @@ import Electrobun, {
 } from "electrobun/bun";
 import {
 	DEFAULT_MODEL_ID,
+	type DeepgramModelId,
 	type GroqModelId,
+	getCloudProviderIdForModel,
 	getModelLabel as getKnownModelLabel,
 	getModelProviderLabel,
 	type InferenceEngine,
+	isCloudModelId,
+	isDeepgramModelId,
 	isGroqModelId,
 	isLocalModelId,
 	type LocalModelCatalogItem,
@@ -45,6 +49,7 @@ import type {
 	TranscriptionResult,
 } from "../shared/rpc";
 import { autoPasteText } from "./autopaste";
+import { transcribeWithDeepgram, verifyDeepgramCredentials } from "./deepgram";
 import { transcribeWithGroq, verifyGroqCredentials } from "./groq";
 import {
 	applyHardwareSupportToModels,
@@ -507,8 +512,10 @@ function buildHardwareSnapshotForRuntime(
 
 let initialSettings = storage.getSettings();
 if (
-	isGroqModelId(initialSettings.defaultModelId) &&
-	!cloudProviderStore.getGroqSnapshot().configured
+	(isGroqModelId(initialSettings.defaultModelId) &&
+		!cloudProviderStore.getGroqSnapshot().configured) ||
+	(isDeepgramModelId(initialSettings.defaultModelId) &&
+		!cloudProviderStore.getDeepgramSnapshot().configured)
 ) {
 	initialSettings = storage.updateSettings({
 		defaultModelId: DEFAULT_MODEL_ID,
@@ -862,6 +869,35 @@ function getGroqConfigOrThrow(): {
 	return config;
 }
 
+function getDeepgramConfigOrThrow(): {
+	apiKey: string;
+	selectedModelId: DeepgramModelId;
+	lastVerifiedAt: string;
+} {
+	const config = cloudProviderStore.getDeepgramConfig();
+	if (!config) {
+		throw new Error(
+			"Connect Deepgram in Models before using a Deepgram cloud model.",
+		);
+	}
+	return config;
+}
+
+function ensureCloudProviderConfig(modelId: ModelId): void {
+	if (isGroqModelId(modelId)) {
+		getGroqConfigOrThrow();
+		return;
+	}
+	if (isDeepgramModelId(modelId)) {
+		getDeepgramConfigOrThrow();
+	}
+}
+
+function getCloudProviderConnectionTitle(modelId: ModelId): string {
+	const providerLabel = getModelProviderLabel(modelId) ?? "Cloud";
+	return `${providerLabel} not connected`;
+}
+
 function cleanupTempAudioFile(path: string): void {
 	if (!path) {
 		return;
@@ -876,17 +912,30 @@ function cleanupTempAudioFile(path: string): void {
 	}
 }
 
-async function transcribeGroqAudio(
-	modelId: GroqModelId,
+async function transcribeCloudAudio(
+	modelId: Exclude<ModelId, LocalModelId>,
 	audioFilePath: string,
 ): Promise<{ text: string; latencyMs: number }> {
-	const config = getGroqConfigOrThrow();
 	try {
-		return await transcribeWithGroq({
-			apiKey: config.apiKey,
-			modelId,
-			audioFilePath,
-		});
+		if (isGroqModelId(modelId)) {
+			const config = getGroqConfigOrThrow();
+			return await transcribeWithGroq({
+				apiKey: config.apiKey,
+				modelId,
+				audioFilePath,
+			});
+		}
+
+		if (isDeepgramModelId(modelId)) {
+			const config = getDeepgramConfigOrThrow();
+			return await transcribeWithDeepgram({
+				apiKey: config.apiKey,
+				modelId,
+				audioFilePath,
+			});
+		}
+
+		throw new Error(`Unsupported cloud model: ${modelId}`);
 	} finally {
 		cleanupTempAudioFile(audioFilePath);
 	}
@@ -1023,12 +1072,18 @@ function triggerSelectedModelWarmup(reason: string): void {
 			refreshModelsCache();
 			const settings = storage.getSettings();
 			const modelId = settings.defaultModelId;
-			if (isGroqModelId(modelId)) {
+			if (isCloudModelId(modelId)) {
+				const providerLabel = getModelProviderLabel(modelId) ?? "Cloud";
+				const providerConfigured = isGroqModelId(modelId)
+					? cloudProviderStore.getGroqSnapshot().configured
+					: cloudProviderStore.getDeepgramSnapshot().configured;
 				lastWarmupSignature = null;
 				setWarmupState({
-					state: "ready",
+					state: providerConfigured ? "ready" : "error",
 					modelId,
-					detail: `${getModelLabel(modelId)} is ready. Audio will be sent to ${getModelProviderLabel(modelId)}.`,
+					detail: providerConfigured
+						? `${getModelLabel(modelId)} is ready. Audio will be sent to ${providerLabel}.`
+						: `Connect ${providerLabel} in Models before using ${getModelLabel(modelId)}.`,
 				});
 				await broadcastSnapshot({ target: "main" });
 				return;
@@ -1982,6 +2037,7 @@ function getSnapshot(): AppSnapshot {
 			modelProgressById,
 			cloudProviders: {
 				groq: cloudProviderStore.getGroqSnapshot(),
+				deepgram: cloudProviderStore.getDeepgramSnapshot(),
 			},
 			sidecarStatus: sidecar.getStatus(),
 			lastJob: lastJobCache,
@@ -2360,15 +2416,17 @@ async function runMicrophoneTranscription(
 		});
 		throw new Error(unsupportedReason);
 	}
-	if (isGroqModelId(modelId)) {
+	if (isCloudModelId(modelId)) {
 		try {
-			getGroqConfigOrThrow();
+			ensureCloudProviderConfig(modelId);
 		} catch (error) {
 			const message =
-				error instanceof Error ? error.message : "Groq is not configured.";
+				error instanceof Error
+					? error.message
+					: "Cloud provider is not configured.";
 			await sendToast({
 				type: "error",
-				title: "Groq not connected",
+				title: getCloudProviderConnectionTitle(modelId),
 				message,
 			});
 			throw error;
@@ -2384,17 +2442,18 @@ async function runMicrophoneTranscription(
 	startRecordingPill();
 
 	try {
-		if (isGroqModelId(modelId)) {
+		if (isCloudModelId(modelId)) {
+			const providerId = getCloudProviderIdForModel(modelId);
 			const recorded = await sidecar.recordMicrophoneWav(clampedDuration);
 			finalizeJob(job, {
 				status: "transcribing",
-				detail: `source=${source}; mode=microphone; stage=transcribing; provider=groq`,
+				detail: `source=${source}; mode=microphone; stage=transcribing; provider=${providerId ?? "cloud"}`,
 			});
 			await setTranscribingPill();
-			const groqResult = await transcribeGroqAudio(modelId, recorded.wavPath);
+			const cloudResult = await transcribeCloudAudio(modelId, recorded.wavPath);
 			return completeTranscription(job, {
-				text: groqResult.text,
-				latencyMs: recorded.latencyMs + groqResult.latencyMs,
+				text: cloudResult.text,
+				latencyMs: recorded.latencyMs + cloudResult.latencyMs,
 			});
 		}
 
@@ -2441,15 +2500,17 @@ async function startHoldToTalkTranscription(source: string): Promise<void> {
 		});
 		return;
 	}
-	if (isGroqModelId(modelId)) {
+	if (isCloudModelId(modelId)) {
 		try {
-			getGroqConfigOrThrow();
+			ensureCloudProviderConfig(modelId);
 		} catch (error) {
 			const message =
-				error instanceof Error ? error.message : "Groq is not configured.";
+				error instanceof Error
+					? error.message
+					: "Cloud provider is not configured.";
 			await sendToast({
 				type: "error",
-				title: "Groq not connected",
+				title: getCloudProviderConnectionTitle(modelId),
 				message,
 			});
 			return;
@@ -2486,15 +2547,15 @@ async function stopHoldToTalkTranscription(source: string): Promise<void> {
 	await setTranscribingPill();
 
 	try {
-		if (isGroqModelId(job.modelId)) {
+		if (isCloudModelId(job.modelId)) {
 			const recorded = await sidecar.finishMicrophoneCaptureWav();
-			const groqResult = await transcribeGroqAudio(
+			const cloudResult = await transcribeCloudAudio(
 				job.modelId,
 				recorded.wavPath,
 			);
 			await completeTranscription(job, {
-				text: groqResult.text,
-				latencyMs: recorded.latencyMs + groqResult.latencyMs,
+				text: cloudResult.text,
+				latencyMs: recorded.latencyMs + cloudResult.latencyMs,
 			});
 			return;
 		}
@@ -2736,6 +2797,39 @@ async function configureGroqProvider(
 	return getSnapshot();
 }
 
+async function configureDeepgramProvider(
+	apiKey: string,
+	modelId: DeepgramModelId,
+): Promise<AppSnapshot> {
+	if (isTranscriptionActive()) {
+		throw new Error(
+			"Wait for the current transcription to finish before changing Deepgram settings.",
+		);
+	}
+
+	const normalizedApiKey = apiKey.trim();
+	const verification = await verifyDeepgramCredentials({
+		apiKey: normalizedApiKey,
+		modelId,
+	});
+
+	cloudProviderStore.saveDeepgramConfig({
+		apiKey: normalizedApiKey,
+		selectedModelId: modelId,
+		lastVerifiedAt: verification.verifiedAt,
+	});
+	storage.updateSettings({ defaultModelId: modelId });
+	lastWarmupSignature = null;
+	triggerSelectedModelWarmup("deepgram-configure");
+	await sendToast({
+		type: "success",
+		title: "Deepgram connected",
+		message: `${getModelLabel(modelId)} is ready to use.`,
+	});
+	await broadcastSnapshot({ target: "main" });
+	return getSnapshot();
+}
+
 async function removeGroqProvider(): Promise<AppSnapshot> {
 	if (isTranscriptionActive()) {
 		throw new Error(
@@ -2756,6 +2850,31 @@ async function removeGroqProvider(): Promise<AppSnapshot> {
 		type: "info",
 		title: "Groq removed",
 		message: "Saved Groq API key and cloud model selection were removed.",
+	});
+	await broadcastSnapshot({ target: "main" });
+	return getSnapshot();
+}
+
+async function removeDeepgramProvider(): Promise<AppSnapshot> {
+	if (isTranscriptionActive()) {
+		throw new Error(
+			"Wait for the current transcription to finish before removing Deepgram.",
+		);
+	}
+
+	cloudProviderStore.removeDeepgramConfig();
+	const settings = storage.getSettings();
+	if (isDeepgramModelId(settings.defaultModelId)) {
+		storage.updateSettings({
+			defaultModelId: DEFAULT_MODEL_ID,
+		});
+	}
+	lastWarmupSignature = null;
+	triggerSelectedModelWarmup("deepgram-remove");
+	await sendToast({
+		type: "info",
+		title: "Deepgram removed",
+		message: "Saved Deepgram API key and cloud model selection were removed.",
 	});
 	await broadcastSnapshot({ target: "main" });
 	return getSnapshot();
@@ -2843,21 +2962,26 @@ function createWindowRpc(windowName: "main" | "pill") {
 						return merged;
 					}),
 				setDefaultModel: ({ modelId }) => {
-					if (isGroqModelId(modelId)) {
+					if (isCloudModelId(modelId)) {
 						try {
-							getGroqConfigOrThrow();
+							ensureCloudProviderConfig(modelId);
 						} catch (error) {
+							const providerLabel = getModelProviderLabel(modelId) ?? "Cloud";
 							void sendToast({
 								type: "error",
-								title: "Groq not connected",
+								title: `${providerLabel} not connected`,
 								message:
 									error instanceof Error
 										? error.message
-										: "Connect Groq before selecting a Groq cloud model.",
+										: `Connect ${providerLabel} before selecting a cloud model.`,
 							});
 							throw error;
 						}
-						cloudProviderStore.updateGroqSelectedModel(modelId);
+						if (isGroqModelId(modelId)) {
+							cloudProviderStore.updateGroqSelectedModel(modelId);
+						} else if (isDeepgramModelId(modelId)) {
+							cloudProviderStore.updateDeepgramSelectedModel(modelId);
+						}
 					}
 					storage.updateSettings({ defaultModelId: modelId });
 					lastWarmupSignature = null;
@@ -2868,6 +2992,9 @@ function createWindowRpc(windowName: "main" | "pill") {
 				configureGroqProvider: async ({ apiKey, modelId }) =>
 					configureGroqProvider(apiKey, modelId),
 				removeGroqProvider: async () => removeGroqProvider(),
+				configureDeepgramProvider: async ({ apiKey, modelId }) =>
+					configureDeepgramProvider(apiKey, modelId),
+				removeDeepgramProvider: async () => removeDeepgramProvider(),
 				runMicrophoneTranscription: async ({ durationSeconds }) =>
 					runMicrophoneTranscription(
 						"settings-window",

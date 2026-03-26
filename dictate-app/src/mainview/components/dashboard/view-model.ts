@@ -1,7 +1,7 @@
 import type { UseDictateRuntimeResult } from "@/mainview/state/useDictateRuntime";
 import type {
+	CloudModelOption,
 	CudaGraphsStatus,
-	GroqModelOption,
 	InferenceEngine,
 	LocalModelCatalogItem,
 	LocalModelId,
@@ -9,11 +9,11 @@ import type {
 	ModelSource,
 } from "@/shared/models";
 import {
-	getGroqModelOption,
+	getCloudModelOption,
 	getModelLabel,
 	getModelProviderLabel,
 	getModelSource,
-	isGroqModelId,
+	isCloudModelId,
 	isLocalModelId,
 } from "@/shared/models";
 import type { AppSnapshot, JobStatus } from "@/shared/rpc";
@@ -51,7 +51,7 @@ export interface DashboardViewModel {
 	isInstallingCuda: boolean;
 	selectedModelId: ModelId;
 	selectedModel: LocalModelCatalogItem | null;
-	selectedCloudModel: GroqModelOption | null;
+	selectedCloudModel: CloudModelOption | null;
 	selectedModelLabel: string;
 	selectedModelSource: ModelSource;
 	selectedModelProviderLabel: string | null;
@@ -336,11 +336,23 @@ export function formatModelProgressLabel(args: {
 	return "";
 }
 
+function isCloudModelConfigured(
+	snapshot: AppSnapshot,
+	model: CloudModelOption,
+): boolean {
+	switch (model.provider) {
+		case "deepgram":
+			return snapshot.cloudProviders.deepgram.configured;
+		default:
+			return snapshot.cloudProviders.groq.configured;
+	}
+}
+
 export function deriveEngineIndicator(args: {
 	snapshot: AppSnapshot;
 	selectedModelId: ModelId;
 	selectedModel: LocalModelCatalogItem | null;
-	selectedCloudModel: GroqModelOption | null;
+	selectedCloudModel: CloudModelOption | null;
 	selectedModelStatus: ModelDisplayStatus | null;
 	isSelectingModelId: ModelId | null;
 	isPreparingModelId: ModelId | null;
@@ -431,18 +443,20 @@ export function deriveEngineIndicator(args: {
 	}
 
 	if (selectedCloudModel) {
-		if (!snapshot.cloudProviders.groq.configured) {
+		const providerLabel =
+			getModelProviderLabel(selectedCloudModel.id) ?? "Cloud";
+		if (!isCloudModelConfigured(snapshot, selectedCloudModel)) {
 			return {
 				kind: "warning",
-				label: "Connect Groq",
-				detail: "Add a Groq API key in Models to use cloud transcription.",
+				label: `Connect ${providerLabel}`,
+				detail: `Add a ${providerLabel} API key in Models to use cloud transcription.`,
 			};
 		}
 
 		return {
 			kind: "ready",
 			label: "Ready",
-			detail: `${selectedCloudModel.label} is ready through Groq cloud transcription.`,
+			detail: `${selectedCloudModel.label} is ready through ${providerLabel} cloud transcription.`,
 		};
 	}
 
@@ -523,7 +537,7 @@ export function buildOverviewMessages(args: {
 	snapshot: AppSnapshot;
 	settings: AppSnapshot["settings"];
 	selectedModel: LocalModelCatalogItem | null;
-	selectedCloudModel: GroqModelOption | null;
+	selectedCloudModel: CloudModelOption | null;
 	selectedModelStatus: ModelDisplayStatus | null;
 	selectedModelRuntime: AppSnapshot["modelRuntimeById"][LocalModelId] | null;
 }): OverviewMessages {
@@ -547,13 +561,15 @@ export function buildOverviewMessages(args: {
 	}
 
 	if (args.selectedCloudModel) {
-		if (!args.snapshot.cloudProviders.groq.configured) {
+		const providerLabel =
+			getModelProviderLabel(args.selectedCloudModel.id) ?? "Cloud";
+		if (!isCloudModelConfigured(args.snapshot, args.selectedCloudModel)) {
 			warnings.push(
-				"Groq is selected, but no Groq API key is connected right now.",
+				`${providerLabel} is selected, but no ${providerLabel} API key is connected right now.`,
 			);
 		} else {
 			tips.push(
-				"Cloud transcription sends captured microphone audio to Groq using your saved API key.",
+				`Cloud transcription sends captured microphone audio to ${providerLabel} using your saved API key.`,
 			);
 			if (args.selectedCloudModel.id === "whisper-large-v3-turbo") {
 				tips.push(
@@ -563,6 +579,16 @@ export function buildOverviewMessages(args: {
 			if (args.selectedCloudModel.id === "whisper-large-v3") {
 				tips.push(
 					"Whisper Large V3 prioritizes accuracy and supports translation workflows.",
+				);
+			}
+			if (args.selectedCloudModel.id === "nova-3") {
+				tips.push(
+					"Nova-3 is the recommended Deepgram option for straightforward BYOK dictation.",
+				);
+			}
+			if (args.selectedCloudModel.id === "nova-2") {
+				tips.push(
+					"Nova-2 is a compatibility fallback when you want Deepgram beyond the Nova-3 default path.",
 				);
 			}
 		}
@@ -682,8 +708,8 @@ export function buildDashboardViewModel(args: {
 	const selectedModel = isLocalModelId(selectedModelId)
 		? (runtime.models.find((model) => model.id === selectedModelId) ?? null)
 		: null;
-	const selectedCloudModel = isGroqModelId(selectedModelId)
-		? getGroqModelOption(selectedModelId)
+	const selectedCloudModel = isCloudModelId(selectedModelId)
+		? getCloudModelOption(selectedModelId)
 		: null;
 	const selectedModelRuntime = selectedModel
 		? (snapshot.modelRuntimeById[selectedModel.id] ?? null)
@@ -707,7 +733,7 @@ export function buildDashboardViewModel(args: {
 			})
 		: "";
 	const selectedModelReady = selectedCloudModel
-		? snapshot.cloudProviders.groq.configured
+		? isCloudModelConfigured(snapshot, selectedCloudModel)
 		: selectedModelStatus === "installed";
 
 	return {

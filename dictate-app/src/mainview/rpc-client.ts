@@ -1,5 +1,10 @@
 import { Electroview } from "electrobun/view";
-import type { GroqModelId, LocalModelId, ModelId } from "@/shared/models";
+import type {
+	DeepgramModelId,
+	GroqModelId,
+	LocalModelId,
+	ModelId,
+} from "@/shared/models";
 import type {
 	AppSnapshot,
 	DeleteModelResult,
@@ -93,6 +98,9 @@ export const rpcClient = {
 	configureGroqProvider: (apiKey: string, modelId: GroqModelId) =>
 		rpcProxy.request.configureGroqProvider({ apiKey, modelId }),
 	removeGroqProvider: () => rpcProxy.request.removeGroqProvider({}),
+	configureDeepgramProvider: (apiKey: string, modelId: DeepgramModelId) =>
+		rpcProxy.request.configureDeepgramProvider({ apiKey, modelId }),
+	removeDeepgramProvider: () => rpcProxy.request.removeDeepgramProvider({}),
 	runMicrophoneTranscription: (
 		durationSeconds?: number,
 	): Promise<TranscriptionResult> =>
