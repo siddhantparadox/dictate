@@ -3,8 +3,9 @@ import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import {
 	DEFAULT_MODEL_ID,
+	type LocalModelCatalogItem,
+	type LocalModelId,
 	MODEL_CATALOG,
-	type ModelCatalogItem,
 	type ModelId,
 	type ModelInstallStatus,
 } from "../shared/models";
@@ -25,8 +26,8 @@ const DEFAULT_SETTINGS: DictateSettings = {
 };
 
 interface DbModelRow {
-	id: ModelId;
-	compatibility_tier: ModelCatalogItem["compatibility"];
+	id: LocalModelId;
+	compatibility_tier: LocalModelCatalogItem["compatibility"];
 	installed: 0 | 1;
 	status: ModelInstallStatus;
 }
@@ -150,12 +151,12 @@ export class DictateStorage {
 		return merged;
 	}
 
-	getModels(): ModelCatalogItem[] {
+	getModels(): LocalModelCatalogItem[] {
 		const dbRows = this.db
 			.query("SELECT id, compatibility_tier, installed, status FROM models")
 			.all() as DbModelRow[];
 
-		const rowById = new Map<ModelId, DbModelRow>(
+		const rowById = new Map<LocalModelId, DbModelRow>(
 			dbRows.map((row) => [row.id, row]),
 		);
 
@@ -169,7 +170,7 @@ export class DictateStorage {
 	}
 
 	setModelStatus(
-		modelId: ModelId,
+		modelId: LocalModelId,
 		next: { installed: boolean; status: ModelInstallStatus },
 	): void {
 		this.db

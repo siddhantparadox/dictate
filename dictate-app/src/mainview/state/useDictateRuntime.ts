@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { rpcClient } from "@/mainview/rpc-client";
-import type { ModelId } from "@/shared/models";
+import type { GroqModelId, LocalModelId, ModelId } from "@/shared/models";
 import type { AppSnapshot, ToastPayload } from "@/shared/rpc";
 
 const SNAPSHOT_RETRY_BASE_MS = 250;
@@ -27,12 +27,19 @@ export interface UseDictateRuntimeResult {
 	isSelectingModelId: ModelId | null;
 	isPreparingModelId: ModelId | null;
 	isDeletingModelId: ModelId | null;
+	isConfiguringGroq: boolean;
+	isRemovingGroq: boolean;
 	isUpdatingSettings: boolean;
 	isLoading: boolean;
 	runtimeError: RuntimeErrorState;
 	selectModel: (modelId: ModelId) => Promise<void>;
-	downloadModel: (modelId: ModelId) => Promise<boolean>;
-	deleteModel: (modelId: ModelId) => Promise<boolean>;
+	downloadModel: (modelId: LocalModelId) => Promise<boolean>;
+	deleteModel: (modelId: LocalModelId) => Promise<boolean>;
+	configureGroqProvider: (
+		apiKey: string,
+		modelId: GroqModelId,
+	) => Promise<void>;
+	removeGroqProvider: () => Promise<void>;
 	installAccelerationRuntime: (mode: "cuda") => Promise<boolean>;
 	startDictation: () => Promise<void>;
 	updateSetting: (
@@ -57,6 +64,8 @@ export function useDictateRuntime(): UseDictateRuntimeResult {
 	const [isDeletingModelId, setIsDeletingModelId] = useState<ModelId | null>(
 		null,
 	);
+	const [isConfiguringGroq, setIsConfiguringGroq] = useState(false);
+	const [isRemovingGroq, setIsRemovingGroq] = useState(false);
 	const [isUpdatingSettings, setIsUpdatingSettings] = useState(false);
 
 	useEffect(() => {
@@ -243,7 +252,7 @@ export function useDictateRuntime(): UseDictateRuntimeResult {
 	);
 
 	const downloadModel = useCallback(
-		async (modelId: ModelId): Promise<boolean> => {
+		async (modelId: LocalModelId): Promise<boolean> => {
 			setIsPreparingModelId(modelId);
 			try {
 				await rpcClient.prepareModel(modelId);
@@ -265,7 +274,7 @@ export function useDictateRuntime(): UseDictateRuntimeResult {
 	);
 
 	const deleteModel = useCallback(
-		async (modelId: ModelId): Promise<boolean> => {
+		async (modelId: LocalModelId): Promise<boolean> => {
 			setIsDeletingModelId(modelId);
 			try {
 				await rpcClient.deleteModel(modelId);
@@ -279,6 +288,35 @@ export function useDictateRuntime(): UseDictateRuntimeResult {
 		},
 		[],
 	);
+
+	const configureGroqProvider = useCallback(
+		async (apiKey: string, modelId: GroqModelId): Promise<void> => {
+			setIsConfiguringGroq(true);
+			try {
+				const snapshot = await rpcClient.configureGroqProvider(apiKey, modelId);
+				setSnapshot(snapshot);
+			} catch (error) {
+				void rpcClient.reportRendererError("configureGroqProvider", error);
+				throw error;
+			} finally {
+				setIsConfiguringGroq(false);
+			}
+		},
+		[],
+	);
+
+	const removeGroqProvider = useCallback(async (): Promise<void> => {
+		setIsRemovingGroq(true);
+		try {
+			const snapshot = await rpcClient.removeGroqProvider();
+			setSnapshot(snapshot);
+		} catch (error) {
+			void rpcClient.reportRendererError("removeGroqProvider", error);
+			throw error;
+		} finally {
+			setIsRemovingGroq(false);
+		}
+	}, []);
 
 	const startDictation = useCallback(async (): Promise<void> => {
 		setIsDictating(true);
@@ -314,12 +352,16 @@ export function useDictateRuntime(): UseDictateRuntimeResult {
 		isSelectingModelId,
 		isPreparingModelId,
 		isDeletingModelId,
+		isConfiguringGroq,
+		isRemovingGroq,
 		isUpdatingSettings,
 		isLoading: !snapshot || !settings,
 		runtimeError,
 		selectModel,
 		downloadModel,
 		deleteModel,
+		configureGroqProvider,
+		removeGroqProvider,
 		installAccelerationRuntime,
 		startDictation,
 		updateSetting,

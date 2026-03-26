@@ -1,7 +1,9 @@
 import type {
 	CudaGraphsStatus,
+	GroqModelId,
 	InferenceEngine,
-	ModelCatalogItem,
+	LocalModelCatalogItem,
+	LocalModelId,
 	ModelId,
 } from "./models";
 
@@ -73,6 +75,13 @@ export interface ModelWarmupState {
 	updatedAt: string;
 }
 
+export interface GroqProviderSnapshot {
+	configured: boolean;
+	maskedApiKey: string | null;
+	selectedModelId: GroqModelId | null;
+	lastVerifiedAt: string | null;
+}
+
 export interface AppSnapshot {
 	pillState: RecordingPillState;
 	pill: {
@@ -81,8 +90,8 @@ export interface AppSnapshot {
 		visible: boolean;
 	};
 	settings: DictateSettings;
-	models: ModelCatalogItem[];
-	modelRuntimeById: Partial<Record<ModelId, ModelRuntimeProfile>>;
+	models: LocalModelCatalogItem[];
+	modelRuntimeById: Partial<Record<LocalModelId, ModelRuntimeProfile>>;
 	warmup: ModelWarmupState;
 	hardware: {
 		platform: "win32" | "darwin" | "linux" | "unknown";
@@ -103,7 +112,7 @@ export interface AppSnapshot {
 	};
 	modelProgressById: Partial<
 		Record<
-			ModelId,
+			LocalModelId,
 			{
 				operation: "download";
 				stage: "queued" | "downloading" | "loading" | "installed" | "error";
@@ -115,6 +124,9 @@ export interface AppSnapshot {
 			}
 		>
 	>;
+	cloudProviders: {
+		groq: GroqProviderSnapshot;
+	};
 	sidecarStatus: "ready" | "starting" | "stopped" | "error";
 	lastJob: JobRecord | null;
 	recentJobs: JobRecord[];
@@ -148,13 +160,13 @@ export interface ToastPayload {
 }
 
 export interface PrepareModelResult {
-	modelId: ModelId;
+	modelId: LocalModelId;
 	status: "installed";
 	latencyMs: number;
 }
 
 export interface DeleteModelResult {
-	modelId: ModelId;
+	modelId: LocalModelId;
 	status: "deleted";
 	latencyMs: number;
 	removedPaths: string[];
@@ -182,16 +194,24 @@ export type DictateRPC = {
 				params: { modelId: ModelId };
 				response: AppSnapshot;
 			};
+			configureGroqProvider: {
+				params: { apiKey: string; modelId: GroqModelId };
+				response: AppSnapshot;
+			};
+			removeGroqProvider: {
+				params: NoParams;
+				response: AppSnapshot;
+			};
 			runMicrophoneTranscription: {
 				params: { durationSeconds?: number };
 				response: TranscriptionResult;
 			};
 			prepareModel: {
-				params: { modelId: ModelId };
+				params: { modelId: LocalModelId };
 				response: PrepareModelResult;
 			};
 			deleteModel: {
-				params: { modelId: ModelId };
+				params: { modelId: LocalModelId };
 				response: DeleteModelResult;
 			};
 			installAccelerationRuntime: {

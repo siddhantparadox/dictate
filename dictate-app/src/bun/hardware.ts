@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import os from "node:os";
-import type { ModelCatalogItem } from "../shared/models";
+import type { LocalModelCatalogItem } from "../shared/models";
 import type { AppSnapshot } from "../shared/rpc";
 
 type HardwareSnapshot = AppSnapshot["hardware"];
@@ -151,9 +151,9 @@ export function probeHardwareSnapshot(): HardwareSnapshot {
 }
 
 function evaluateSupport(
-	model: ModelCatalogItem,
+	model: LocalModelCatalogItem,
 	hardware: HardwareSnapshot,
-): Pick<ModelCatalogItem, "hardwareSupport" | "hardwareReason"> {
+): Pick<LocalModelCatalogItem, "hardwareSupport" | "hardwareReason"> {
 	if (hardware.totalRamGb < model.minSystemRamGb) {
 		return {
 			hardwareSupport: "unsupported",
@@ -209,9 +209,9 @@ function evaluateSupport(
 }
 
 export function applyHardwareSupportToModels(
-	models: ModelCatalogItem[],
+	models: LocalModelCatalogItem[],
 	hardware: HardwareSnapshot,
-): ModelCatalogItem[] {
+): LocalModelCatalogItem[] {
 	return models.map((model) => ({
 		...model,
 		...evaluateSupport(model, hardware),

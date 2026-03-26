@@ -593,6 +593,22 @@ def handle_transcribe_microphone(request_id: str, params: dict[str, Any]) -> Non
     response_ok(request_id, {"text": text, "latency_ms": max(latency_ms, 1)})
 
 
+def handle_record_microphone_wav(request_id: str, params: dict[str, Any]) -> None:
+    start = time.perf_counter()
+    duration_seconds = float(params.get("duration_seconds", 7.0))
+    audio, sample_rate = _record_microphone(duration_seconds=duration_seconds)
+    wav_path = _write_temp_wav(audio, sample_rate)
+
+    latency_ms = int((time.perf_counter() - start) * 1000)
+    response_ok(
+        request_id,
+        {
+            "wav_path": wav_path,
+            "latency_ms": max(latency_ms, 1),
+        },
+    )
+
+
 def handle_start_microphone_capture(request_id: str, params: dict[str, Any]) -> None:
     start = time.perf_counter()
     max_duration = float(params.get("max_duration_seconds", MAX_LIVE_CAPTURE_SECONDS))
@@ -636,6 +652,30 @@ def handle_finish_microphone_capture(request_id: str, params: dict[str, Any]) ->
         request_id,
         {
             "text": text,
+            "latency_ms": max(capture_ms + finish_latency_ms, 1),
+        },
+    )
+
+
+def handle_finish_microphone_capture_wav(
+    request_id: str, params: dict[str, Any]
+) -> None:
+    start = time.perf_counter()
+    global _active_microphone_session
+    session = _active_microphone_session
+    _active_microphone_session = None
+
+    if session is None or not session.is_active():
+        raise RuntimeError("No active microphone capture session.")
+
+    audio, sample_rate, capture_ms = session.stop()
+    wav_path = _write_temp_wav(audio, sample_rate)
+    finish_latency_ms = int((time.perf_counter() - start) * 1000)
+
+    response_ok(
+        request_id,
+        {
+            "wav_path": wav_path,
             "latency_ms": max(capture_ms + finish_latency_ms, 1),
         },
     )
@@ -771,10 +811,14 @@ def main() -> int:
                 handle_transcribe(request_id, payload_params)
             elif method == "transcribe_microphone":
                 handle_transcribe_microphone(request_id, payload_params)
+            elif method == "record_microphone_wav":
+                handle_record_microphone_wav(request_id, payload_params)
             elif method == "start_microphone_capture":
                 handle_start_microphone_capture(request_id, payload_params)
             elif method == "finish_microphone_capture":
                 handle_finish_microphone_capture(request_id, payload_params)
+            elif method == "finish_microphone_capture_wav":
+                handle_finish_microphone_capture_wav(request_id, payload_params)
             elif method == "prepare_model":
                 handle_prepare_model(request_id, payload_params)
             elif method == "delete_model":

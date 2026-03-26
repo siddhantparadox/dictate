@@ -1,9 +1,20 @@
 import type { UseDictateRuntimeResult } from "@/mainview/state/useDictateRuntime";
 import type {
 	CudaGraphsStatus,
+	GroqModelOption,
 	InferenceEngine,
-	ModelCatalogItem,
+	LocalModelCatalogItem,
+	LocalModelId,
 	ModelId,
+	ModelSource,
+} from "@/shared/models";
+import {
+	getGroqModelOption,
+	getModelLabel,
+	getModelProviderLabel,
+	getModelSource,
+	isGroqModelId,
+	isLocalModelId,
 } from "@/shared/models";
 import type { AppSnapshot, JobStatus } from "@/shared/rpc";
 
@@ -20,7 +31,7 @@ export type ModelDisplayStatus =
 	| "error";
 
 export type ModelProgressEntry = NonNullable<
-	AppSnapshot["modelProgressById"][ModelId]
+	AppSnapshot["modelProgressById"][LocalModelId]
 >;
 
 export interface EngineIndicator {
@@ -38,8 +49,14 @@ export interface DashboardViewModel {
 	showCudaInstaller: boolean;
 	isCudaRuntimePending: boolean;
 	isInstallingCuda: boolean;
-	selectedModel: ModelCatalogItem | null;
-	selectedModelRuntime: AppSnapshot["modelRuntimeById"][ModelId] | null;
+	selectedModelId: ModelId;
+	selectedModel: LocalModelCatalogItem | null;
+	selectedCloudModel: GroqModelOption | null;
+	selectedModelLabel: string;
+	selectedModelSource: ModelSource;
+	selectedModelProviderLabel: string | null;
+	selectedModelReady: boolean;
+	selectedModelRuntime: AppSnapshot["modelRuntimeById"][LocalModelId] | null;
 	selectedModelProgress: ModelProgressEntry | null;
 	selectedModelStatus: ModelDisplayStatus | null;
 	selectedModelProgressLabel: string;
@@ -242,7 +259,7 @@ export function jobStatusClass(status: JobStatus): string {
 }
 
 export function resolveModelDisplayStatus(args: {
-	model: ModelCatalogItem;
+	model: LocalModelCatalogItem;
 	progressEntry: ModelProgressEntry | null;
 	isPreparing: boolean;
 	isDeleting: boolean;
@@ -321,13 +338,21 @@ export function formatModelProgressLabel(args: {
 
 export function deriveEngineIndicator(args: {
 	snapshot: AppSnapshot;
-	selectedModel: ModelCatalogItem | null;
+	selectedModelId: ModelId;
+	selectedModel: LocalModelCatalogItem | null;
+	selectedCloudModel: GroqModelOption | null;
 	selectedModelStatus: ModelDisplayStatus | null;
 	isSelectingModelId: ModelId | null;
 	isPreparingModelId: ModelId | null;
 	isDeletingModelId: ModelId | null;
 }): EngineIndicator {
-	const { snapshot, selectedModelStatus, selectedModel } = args;
+	const {
+		snapshot,
+		selectedModel,
+		selectedCloudModel,
+		selectedModelStatus,
+		selectedModelId,
+	} = args;
 
 	if (snapshot.accelerationInstaller.status === "installing") {
 		return {
@@ -404,13 +429,31 @@ export function deriveEngineIndicator(args: {
 			detail: "Runtime will start on next dictation.",
 		};
 	}
+
+	if (selectedCloudModel) {
+		if (!snapshot.cloudProviders.groq.configured) {
+			return {
+				kind: "warning",
+				label: "Connect Groq",
+				detail: "Add a Groq API key in Models to use cloud transcription.",
+			};
+		}
+
+		return {
+			kind: "ready",
+			label: "Ready",
+			detail: `${selectedCloudModel.label} is ready through Groq cloud transcription.`,
+		};
+	}
+
 	if (!selectedModel) {
 		return {
 			kind: "warning",
 			label: "No model",
-			detail: "Select a model to start dictation.",
+			detail: `Select a model to start dictation. Current target: ${getModelLabel(selectedModelId)}.`,
 		};
 	}
+
 	if (
 		selectedModelStatus === "not_installed" ||
 		selectedModelStatus === "error"
@@ -479,15 +522,14 @@ export function deriveEngineIndicator(args: {
 export function buildOverviewMessages(args: {
 	snapshot: AppSnapshot;
 	settings: AppSnapshot["settings"];
-	selectedModel: ModelCatalogItem | null;
+	selectedModel: LocalModelCatalogItem | null;
+	selectedCloudModel: GroqModelOption | null;
 	selectedModelStatus: ModelDisplayStatus | null;
-	selectedModelRuntime: AppSnapshot["modelRuntimeById"][ModelId] | null;
+	selectedModelRuntime: AppSnapshot["modelRuntimeById"][LocalModelId] | null;
 }): OverviewMessages {
 	const warnings: string[] = [];
 	const tips: string[] = [
-		"First dictation after app launch can be slower while the model runtime warms.",
 		"Hold Ctrl + Shift only while speaking, then release to transcribe immediately.",
-		"Model files stay on disk after download, so later sessions avoid re-download delays.",
 	];
 
 	if (args.snapshot.sidecarStatus === "error") {
@@ -503,9 +545,37 @@ export function buildOverviewMessages(args: {
 			"CUDA is selected, but the active runtime is not CUDA yet. Transcription may be slower until CUDA is active.",
 		);
 	}
-	if (!args.selectedModel) {
+
+	if (args.selectedCloudModel) {
+		if (!args.snapshot.cloudProviders.groq.configured) {
+			warnings.push(
+				"Groq is selected, but no Groq API key is connected right now.",
+			);
+		} else {
+			tips.push(
+				"Cloud transcription sends captured microphone audio to Groq using your saved API key.",
+			);
+			if (args.selectedCloudModel.id === "whisper-large-v3-turbo") {
+				tips.push(
+					"Whisper Large V3 Turbo is the fastest and lowest-cost Groq option for everyday dictation.",
+				);
+			}
+			if (args.selectedCloudModel.id === "whisper-large-v3") {
+				tips.push(
+					"Whisper Large V3 prioritizes accuracy and supports translation workflows.",
+				);
+			}
+		}
+	} else if (!args.selectedModel) {
 		warnings.push("No default model is selected. Choose a model in Models.");
 	} else {
+		tips.push(
+			"First dictation after app launch can be slower while the model runtime warms.",
+		);
+		tips.push(
+			"Model files stay on disk after download, so later sessions avoid re-download delays.",
+		);
+
 		if (args.selectedModel.hardwareSupport === "unsupported") {
 			warnings.push(
 				args.selectedModel.hardwareReason ||
@@ -582,6 +652,17 @@ export function buildOverviewMessages(args: {
 	return { warnings, tips };
 }
 
+export function formatJobModelLabel(modelId: ModelId): string {
+	const label = getModelLabel(modelId);
+	const providerLabel = getModelProviderLabel(modelId);
+	if (!providerLabel) {
+		return label;
+	}
+	return label.toLowerCase().startsWith(providerLabel.toLowerCase())
+		? label
+		: `${providerLabel} • ${label}`;
+}
+
 export function buildDashboardViewModel(args: {
 	runtime: UseDictateRuntimeResult;
 	snapshot: AppSnapshot;
@@ -597,9 +678,13 @@ export function buildDashboardViewModel(args: {
 	const isInstallingCuda =
 		snapshot.accelerationInstaller.status === "installing" &&
 		snapshot.accelerationInstaller.mode === "cuda";
-	const selectedModel =
-		runtime.models.find((model) => model.id === settings.defaultModelId) ??
-		null;
+	const selectedModelId = settings.defaultModelId;
+	const selectedModel = isLocalModelId(selectedModelId)
+		? (runtime.models.find((model) => model.id === selectedModelId) ?? null)
+		: null;
+	const selectedCloudModel = isGroqModelId(selectedModelId)
+		? getGroqModelOption(selectedModelId)
+		: null;
 	const selectedModelRuntime = selectedModel
 		? (snapshot.modelRuntimeById[selectedModel.id] ?? null)
 		: null;
@@ -621,19 +706,30 @@ export function buildDashboardViewModel(args: {
 				progressEntry: selectedModelProgress,
 			})
 		: "";
+	const selectedModelReady = selectedCloudModel
+		? snapshot.cloudProviders.groq.configured
+		: selectedModelStatus === "installed";
 
 	return {
 		showCudaInstaller,
 		isCudaRuntimePending,
 		isInstallingCuda,
+		selectedModelId,
 		selectedModel,
+		selectedCloudModel,
+		selectedModelLabel: getModelLabel(selectedModelId),
+		selectedModelSource: getModelSource(selectedModelId),
+		selectedModelProviderLabel: getModelProviderLabel(selectedModelId),
+		selectedModelReady,
 		selectedModelRuntime,
 		selectedModelProgress,
 		selectedModelStatus,
 		selectedModelProgressLabel,
 		engineIndicator: deriveEngineIndicator({
 			snapshot,
+			selectedModelId,
 			selectedModel,
+			selectedCloudModel,
 			selectedModelStatus,
 			isSelectingModelId: runtime.isSelectingModelId,
 			isPreparingModelId: runtime.isPreparingModelId,
@@ -643,6 +739,7 @@ export function buildDashboardViewModel(args: {
 			snapshot,
 			settings,
 			selectedModel,
+			selectedCloudModel,
 			selectedModelStatus,
 			selectedModelRuntime,
 		}),

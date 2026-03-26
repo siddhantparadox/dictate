@@ -53,6 +53,11 @@ export function OverviewSection({
 }: OverviewSectionProps) {
 	const {
 		selectedModel,
+		selectedCloudModel,
+		selectedModelLabel,
+		selectedModelProviderLabel,
+		selectedModelReady,
+		selectedModelSource,
 		selectedModelRuntime,
 		selectedModelStatus,
 		selectedModelProgressLabel,
@@ -85,9 +90,11 @@ export function OverviewSection({
 		},
 		{
 			label: "Engine",
-			value: selectedModelRuntime
-				? engineLabel(selectedModelRuntime.activeEngine)
-				: "Unavailable",
+			value: selectedCloudModel
+				? "Groq Cloud"
+				: selectedModelRuntime
+					? engineLabel(selectedModelRuntime.activeEngine)
+					: "Unavailable",
 		},
 		{
 			label: "Memory",
@@ -107,13 +114,13 @@ export function OverviewSection({
 						</article>
 						<article className="overview-stat-card">
 							<p className="surface-label">Active model</p>
-							<p className="overview-stat-value">
-								{selectedModel?.label ?? "No model selected"}
-							</p>
+							<p className="overview-stat-value">{selectedModelLabel}</p>
 							<p className="overview-stat-detail">
 								{selectedModel
 									? `${selectedModel.sizeLabel} • ${modelRuntimeLabel(selectedModel.runtime)}`
-									: "Choose a model in Models."}
+									: selectedCloudModel
+										? `${selectedModelProviderLabel ?? "Cloud"} • audio sent to provider`
+										: "Choose a model in Models."}
 							</p>
 						</article>
 						<article className="overview-stat-card">
@@ -127,12 +134,17 @@ export function OverviewSection({
 						<article className="overview-stat-card">
 							<p className="surface-label">Runtime</p>
 							<p className="overview-stat-value">
-								{selectedModelRuntime
-									? `${engineLabel(selectedModelRuntime.activeEngine)}`
-									: snapshot.hardware.asrRuntime.toUpperCase()}
+								{selectedCloudModel
+									? "Cloud"
+									: selectedModelRuntime
+										? `${engineLabel(selectedModelRuntime.activeEngine)}`
+										: snapshot.hardware.asrRuntime.toUpperCase()}
 							</p>
 							<p className="overview-stat-detail">
-								{selectedModelRuntime?.quantizationLabel ?? "Waiting for model"}
+								{selectedCloudModel
+									? `${selectedModelProviderLabel ?? "Groq"} transcription`
+									: (selectedModelRuntime?.quantizationLabel ??
+										"Waiting for model")}
 							</p>
 						</article>
 					</section>
@@ -160,11 +172,7 @@ export function OverviewSection({
 						<button
 							type="button"
 							className="record-test-button"
-							disabled={
-								runtime.isDictating ||
-								!selectedModel ||
-								selectedModelStatus !== "installed"
-							}
+							disabled={runtime.isDictating || !selectedModelReady}
 							onClick={() => void runtime.startDictation()}
 						>
 							{runtime.isDictating ? (
@@ -197,10 +205,14 @@ export function OverviewSection({
 								{runtime.isDictating ? "Listening" : "Press to test"}
 							</p>
 							<p className="quick-test-detail">
-								{selectedModelStatus
-									? modelStatusLabel(selectedModelStatus, true)
-									: "Idle"}
-								{selectedModel ? ` • ${selectedModel.label}` : ""}
+								{selectedCloudModel
+									? selectedModelReady
+										? "Connected"
+										: "Connect Groq"
+									: selectedModelStatus
+										? modelStatusLabel(selectedModelStatus, true)
+										: "Idle"}
+								{selectedModelLabel ? ` • ${selectedModelLabel}` : ""}
 							</p>
 						</div>
 					</section>
@@ -248,13 +260,22 @@ export function OverviewSection({
 							<span>
 								Mode {accelerationModeLabel(settings.accelerationMode)}
 							</span>
-							{selectedModelStatus ? (
+							{selectedCloudModel ? (
+								<span
+									className={`status-pill ${
+										selectedModelReady ? "ready" : "warning"
+									}`}
+								>
+									{selectedModelReady ? "Cloud" : "Connect"}
+								</span>
+							) : selectedModelStatus ? (
 								<span
 									className={`status-pill ${modelStatusClass(selectedModelStatus)}`}
 								>
 									{modelStatusLabel(
 										selectedModelStatus,
-										settings.defaultModelId === selectedModel?.id,
+										selectedModelSource === "local" &&
+											settings.defaultModelId === selectedModel?.id,
 									)}
 								</span>
 							) : null}

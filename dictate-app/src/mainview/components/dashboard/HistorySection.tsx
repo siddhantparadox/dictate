@@ -1,5 +1,9 @@
 import type { AppSnapshot } from "@/shared/rpc";
-import { jobStatusClass, jobStatusLabel } from "./view-model";
+import {
+	formatJobModelLabel,
+	jobStatusClass,
+	jobStatusLabel,
+} from "./view-model";
 
 interface HistorySectionProps {
 	recentJobs: AppSnapshot["recentJobs"];
@@ -98,7 +102,9 @@ export function HistorySection({ recentJobs }: HistorySectionProps) {
 									/>
 									<div className="history-row-body">
 										<div className="history-row-meta">
-											<p className="history-model">{job.modelId}</p>
+											<p className="history-model">
+												{formatJobModelLabel(job.modelId)}
+											</p>
 											<span
 												className={`history-badge ${jobStatusClass(job.status)}`}
 											>

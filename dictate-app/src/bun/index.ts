@@ -1,7 +1,13 @@
 import { dlopen, FFIType, type Library, type Pointer, suffix } from "bun:ffi";
 import { spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, renameSync } from "node:fs";
+import {
+	existsSync,
+	mkdirSync,
+	readdirSync,
+	renameSync,
+	rmSync,
+} from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import Electrobun, {
@@ -15,8 +21,14 @@ import Electrobun, {
 } from "electrobun/bun";
 import {
 	DEFAULT_MODEL_ID,
+	type GroqModelId,
+	getModelLabel as getKnownModelLabel,
+	getModelProviderLabel,
 	type InferenceEngine,
-	type ModelCatalogItem,
+	isGroqModelId,
+	isLocalModelId,
+	type LocalModelCatalogItem,
+	type LocalModelId,
 	type ModelId,
 } from "../shared/models";
 import type {
@@ -33,10 +45,12 @@ import type {
 	TranscriptionResult,
 } from "../shared/rpc";
 import { autoPasteText } from "./autopaste";
+import { transcribeWithGroq, verifyGroqCredentials } from "./groq";
 import {
 	applyHardwareSupportToModels,
 	probeHardwareSnapshot,
 } from "./hardware";
+import { CloudProviderStore } from "./provider-store";
 import { SidecarClient } from "./sidecar";
 import { DictateStorage } from "./storage";
 
@@ -87,7 +101,7 @@ type WindowRpc = {
 
 type AccelerationMode = DictateSettings["accelerationMode"];
 type ModelProgressEntry = NonNullable<
-	AppSnapshot["modelProgressById"][ModelId]
+	AppSnapshot["modelProgressById"][LocalModelId]
 >;
 type ModelRuntimeById = AppSnapshot["modelRuntimeById"];
 type WarmupState = AppSnapshot["warmup"];
@@ -375,6 +389,7 @@ const sidecarProjectRoot = resolve(sidecarScript, "..", "..");
 const dictateHomeDir = ensureDirectory(
 	process.env.DICTATE_HOME ?? join(homedir(), ".dictateapp"),
 );
+const cloudProviderStore = new CloudProviderStore(dictateHomeDir);
 const dictateModelsDir = ensureDirectory(join(dictateHomeDir, "models"));
 const dictateHfHomeDir = ensureDirectory(join(dictateModelsDir, "huggingface"));
 const dictateHfHubDir = ensureDirectory(join(dictateHfHomeDir, "hub"));
@@ -490,7 +505,15 @@ function buildHardwareSnapshotForRuntime(
 	};
 }
 
-const initialSettings = storage.getSettings();
+let initialSettings = storage.getSettings();
+if (
+	isGroqModelId(initialSettings.defaultModelId) &&
+	!cloudProviderStore.getGroqSnapshot().configured
+) {
+	initialSettings = storage.updateSettings({
+		defaultModelId: DEFAULT_MODEL_ID,
+	});
+}
 const initialRuntime = resolveSidecarRuntime(initialSettings.accelerationMode);
 const sidecarEnvironment = {
 	DICTATE_HOME: dictateHomeDir,
@@ -519,7 +542,7 @@ function scheduleModelProgressBroadcast(): void {
 }
 
 function setModelProgress(
-	modelId: ModelId,
+	modelId: LocalModelId,
 	progress: ModelProgressEntry | null,
 ): void {
 	if (!progress) {
@@ -824,10 +847,52 @@ function setWarmupState(next: Omit<WarmupState, "updatedAt">): void {
 }
 
 function getModelLabel(modelId: ModelId): string {
-	return modelsCache.find((model) => model.id === modelId)?.label ?? modelId;
+	return getKnownModelLabel(modelId);
 }
 
-function resolveTargetEngine(model: ModelCatalogItem): InferenceEngine {
+function getGroqConfigOrThrow(): {
+	apiKey: string;
+	selectedModelId: GroqModelId;
+	lastVerifiedAt: string;
+} {
+	const config = cloudProviderStore.getGroqConfig();
+	if (!config) {
+		throw new Error("Connect Groq in Models before using a Groq cloud model.");
+	}
+	return config;
+}
+
+function cleanupTempAudioFile(path: string): void {
+	if (!path) {
+		return;
+	}
+	try {
+		rmSync(path, { force: true });
+	} catch (error) {
+		console.warn(
+			`[audio] failed to remove temp file ${path}:`,
+			error instanceof Error ? error.message : error,
+		);
+	}
+}
+
+async function transcribeGroqAudio(
+	modelId: GroqModelId,
+	audioFilePath: string,
+): Promise<{ text: string; latencyMs: number }> {
+	const config = getGroqConfigOrThrow();
+	try {
+		return await transcribeWithGroq({
+			apiKey: config.apiKey,
+			modelId,
+			audioFilePath,
+		});
+	} finally {
+		cleanupTempAudioFile(audioFilePath);
+	}
+}
+
+function resolveTargetEngine(model: LocalModelCatalogItem): InferenceEngine {
 	if (
 		model.inference.strictTensorRtWhenSupported &&
 		model.inference.tensorRtSupported
@@ -838,12 +903,12 @@ function resolveTargetEngine(model: ModelCatalogItem): InferenceEngine {
 }
 
 function resolveModelRuntimeProfile(
-	model: ModelCatalogItem,
+	model: LocalModelCatalogItem,
 	settings: DictateSettings,
-): NonNullable<ModelRuntimeById[ModelId]> {
+): NonNullable<ModelRuntimeById[LocalModelId]> {
 	const targetEngine = resolveTargetEngine(model);
 	let activeEngine: InferenceEngine = model.inference.defaultEngine;
-	let status: NonNullable<ModelRuntimeById[ModelId]>["status"] = "ready";
+	let status: NonNullable<ModelRuntimeById[LocalModelId]>["status"] = "ready";
 	let detail = "";
 
 	if (model.hardwareSupport === "unsupported") {
@@ -917,7 +982,7 @@ function resolveModelRuntimeProfile(
 
 function buildModelRuntimeById(
 	settings: DictateSettings,
-	modelsForHardware: ModelCatalogItem[],
+	modelsForHardware: LocalModelCatalogItem[],
 ): ModelRuntimeById {
 	const runtimeById: ModelRuntimeById = {};
 	for (const model of modelsForHardware) {
@@ -926,7 +991,7 @@ function buildModelRuntimeById(
 	return runtimeById;
 }
 
-function buildWarmupSignature(modelId: ModelId): string {
+function buildWarmupSignature(modelId: LocalModelId): string {
 	const settings = storage.getSettings();
 	return [
 		modelId,
@@ -958,6 +1023,17 @@ function triggerSelectedModelWarmup(reason: string): void {
 			refreshModelsCache();
 			const settings = storage.getSettings();
 			const modelId = settings.defaultModelId;
+			if (isGroqModelId(modelId)) {
+				lastWarmupSignature = null;
+				setWarmupState({
+					state: "ready",
+					modelId,
+					detail: `${getModelLabel(modelId)} is ready. Audio will be sent to ${getModelProviderLabel(modelId)}.`,
+				});
+				await broadcastSnapshot({ target: "main" });
+				return;
+			}
+
 			const model = modelsCache.find((candidate) => candidate.id === modelId);
 			if (!model || model.status !== "installed") {
 				lastWarmupSignature = null;
@@ -1361,13 +1437,16 @@ async function installAccelerationRuntime(
 	}
 }
 
-function getModelForCurrentHardware(modelId: ModelId) {
+function getModelForCurrentHardware(modelId: LocalModelId) {
 	return applyHardwareSupportToModels(modelsCache, hardwareSnapshot).find(
 		(model) => model.id === modelId,
 	);
 }
 
 function getUnsupportedModelReason(modelId: ModelId): string | null {
+	if (!isLocalModelId(modelId)) {
+		return null;
+	}
 	const model = getModelForCurrentHardware(modelId);
 	if (!model || model.hardwareSupport !== "unsupported") {
 		return null;
@@ -1901,6 +1980,9 @@ function getSnapshot(): AppSnapshot {
 			hardware: hardwareSnapshot,
 			accelerationInstaller: accelerationInstallerState,
 			modelProgressById,
+			cloudProviders: {
+				groq: cloudProviderStore.getGroqSnapshot(),
+			},
 			sidecarStatus: sidecar.getStatus(),
 			lastJob: lastJobCache,
 			recentJobs: recentJobsCache,
@@ -2278,6 +2360,20 @@ async function runMicrophoneTranscription(
 		});
 		throw new Error(unsupportedReason);
 	}
+	if (isGroqModelId(modelId)) {
+		try {
+			getGroqConfigOrThrow();
+		} catch (error) {
+			const message =
+				error instanceof Error ? error.message : "Groq is not configured.";
+			await sendToast({
+				type: "error",
+				title: "Groq not connected",
+				message,
+			});
+			throw error;
+		}
+	}
 	const clampedDuration = Math.max(
 		2,
 		Math.min(20, Math.round(durationSeconds)),
@@ -2288,6 +2384,20 @@ async function runMicrophoneTranscription(
 	startRecordingPill();
 
 	try {
+		if (isGroqModelId(modelId)) {
+			const recorded = await sidecar.recordMicrophoneWav(clampedDuration);
+			finalizeJob(job, {
+				status: "transcribing",
+				detail: `source=${source}; mode=microphone; stage=transcribing; provider=groq`,
+			});
+			await setTranscribingPill();
+			const groqResult = await transcribeGroqAudio(modelId, recorded.wavPath);
+			return completeTranscription(job, {
+				text: groqResult.text,
+				latencyMs: recorded.latencyMs + groqResult.latencyMs,
+			});
+		}
+
 		const sidecarPromise = sidecar.transcribeMicrophone(
 			modelId,
 			clampedDuration,
@@ -2331,6 +2441,20 @@ async function startHoldToTalkTranscription(source: string): Promise<void> {
 		});
 		return;
 	}
+	if (isGroqModelId(modelId)) {
+		try {
+			getGroqConfigOrThrow();
+		} catch (error) {
+			const message =
+				error instanceof Error ? error.message : "Groq is not configured.";
+			await sendToast({
+				type: "error",
+				title: "Groq not connected",
+				message,
+			});
+			return;
+		}
+	}
 	const job = createInitialJob(modelId, source);
 	storage.insertJob(job);
 	updateJobCache(job);
@@ -2362,6 +2486,19 @@ async function stopHoldToTalkTranscription(source: string): Promise<void> {
 	await setTranscribingPill();
 
 	try {
+		if (isGroqModelId(job.modelId)) {
+			const recorded = await sidecar.finishMicrophoneCaptureWav();
+			const groqResult = await transcribeGroqAudio(
+				job.modelId,
+				recorded.wavPath,
+			);
+			await completeTranscription(job, {
+				text: groqResult.text,
+				latencyMs: recorded.latencyMs + groqResult.latencyMs,
+			});
+			return;
+		}
+
 		const result = await sidecar.finishMicrophoneCapture(job.modelId);
 		await completeTranscription(job, result);
 	} catch (error) {
@@ -2369,7 +2506,9 @@ async function stopHoldToTalkTranscription(source: string): Promise<void> {
 	}
 }
 
-async function prepareModel(modelId: ModelId): Promise<PrepareModelResult> {
+async function prepareModel(
+	modelId: LocalModelId,
+): Promise<PrepareModelResult> {
 	const unsupportedReason = getUnsupportedModelReason(modelId);
 	if (unsupportedReason) {
 		await sendToast({
@@ -2476,7 +2615,9 @@ async function prepareModel(modelId: ModelId): Promise<PrepareModelResult> {
 	}
 }
 
-function resolveDefaultModelAfterDelete(deletedModelId: ModelId): ModelId {
+function resolveDefaultModelAfterDelete(
+	deletedModelId: LocalModelId,
+): LocalModelId {
 	const installedFallback = modelsCache.find(
 		(model) =>
 			model.id !== deletedModelId &&
@@ -2497,7 +2638,7 @@ function resolveDefaultModelAfterDelete(deletedModelId: ModelId): ModelId {
 	return firstAlternative ?? DEFAULT_MODEL_ID;
 }
 
-async function deleteModel(modelId: ModelId): Promise<DeleteModelResult> {
+async function deleteModel(modelId: LocalModelId): Promise<DeleteModelResult> {
 	if (isTranscriptionActive()) {
 		throw new Error(
 			"Wait for transcription to finish before deleting a model.",
@@ -2560,6 +2701,64 @@ async function deleteModel(modelId: ModelId): Promise<DeleteModelResult> {
 		await broadcastSnapshot();
 		throw error;
 	}
+}
+
+async function configureGroqProvider(
+	apiKey: string,
+	modelId: GroqModelId,
+): Promise<AppSnapshot> {
+	if (isTranscriptionActive()) {
+		throw new Error(
+			"Wait for the current transcription to finish before changing Groq settings.",
+		);
+	}
+
+	const normalizedApiKey = apiKey.trim();
+	const verification = await verifyGroqCredentials({
+		apiKey: normalizedApiKey,
+		modelId,
+	});
+
+	cloudProviderStore.saveGroqConfig({
+		apiKey: normalizedApiKey,
+		selectedModelId: modelId,
+		lastVerifiedAt: verification.verifiedAt,
+	});
+	storage.updateSettings({ defaultModelId: modelId });
+	lastWarmupSignature = null;
+	triggerSelectedModelWarmup("groq-configure");
+	await sendToast({
+		type: "success",
+		title: "Groq connected",
+		message: `${getModelLabel(modelId)} is ready to use.`,
+	});
+	await broadcastSnapshot({ target: "main" });
+	return getSnapshot();
+}
+
+async function removeGroqProvider(): Promise<AppSnapshot> {
+	if (isTranscriptionActive()) {
+		throw new Error(
+			"Wait for the current transcription to finish before removing Groq.",
+		);
+	}
+
+	cloudProviderStore.removeGroqConfig();
+	const settings = storage.getSettings();
+	if (isGroqModelId(settings.defaultModelId)) {
+		storage.updateSettings({
+			defaultModelId: DEFAULT_MODEL_ID,
+		});
+	}
+	lastWarmupSignature = null;
+	triggerSelectedModelWarmup("groq-remove");
+	await sendToast({
+		type: "info",
+		title: "Groq removed",
+		message: "Saved Groq API key and cloud model selection were removed.",
+	});
+	await broadcastSnapshot({ target: "main" });
+	return getSnapshot();
 }
 
 function registerGlobalHotkey(hotkey: string): boolean {
@@ -2644,12 +2843,31 @@ function createWindowRpc(windowName: "main" | "pill") {
 						return merged;
 					}),
 				setDefaultModel: ({ modelId }) => {
+					if (isGroqModelId(modelId)) {
+						try {
+							getGroqConfigOrThrow();
+						} catch (error) {
+							void sendToast({
+								type: "error",
+								title: "Groq not connected",
+								message:
+									error instanceof Error
+										? error.message
+										: "Connect Groq before selecting a Groq cloud model.",
+							});
+							throw error;
+						}
+						cloudProviderStore.updateGroqSelectedModel(modelId);
+					}
 					storage.updateSettings({ defaultModelId: modelId });
 					lastWarmupSignature = null;
 					triggerSelectedModelWarmup("default-model-change");
 					void broadcastSnapshot();
 					return getSnapshot();
 				},
+				configureGroqProvider: async ({ apiKey, modelId }) =>
+					configureGroqProvider(apiKey, modelId),
+				removeGroqProvider: async () => removeGroqProvider(),
 				runMicrophoneTranscription: async ({ durationSeconds }) =>
 					runMicrophoneTranscription(
 						"settings-window",

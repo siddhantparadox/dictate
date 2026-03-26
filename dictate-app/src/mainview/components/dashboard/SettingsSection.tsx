@@ -26,7 +26,10 @@ export function SettingsSection({
 	onThemePreferenceChange,
 }: SettingsSectionProps) {
 	const {
-		selectedModel,
+		selectedCloudModel,
+		selectedModelLabel,
+		selectedModelProviderLabel,
+		selectedModelReady,
 		selectedModelRuntime,
 		showCudaInstaller,
 		isCudaRuntimePending,
@@ -156,9 +159,11 @@ export function SettingsSection({
 								</span>
 							</div>
 							<span className="settings-value">
-								{selectedModelRuntime
-									? `${engineLabel(selectedModelRuntime.activeEngine)} • ${selectedModelRuntime.quantizationLabel}`
-									: snapshot.hardware.asrRuntime.toUpperCase()}
+								{selectedCloudModel
+									? `${selectedModelProviderLabel ?? "Groq"} Cloud`
+									: selectedModelRuntime
+										? `${engineLabel(selectedModelRuntime.activeEngine)} • ${selectedModelRuntime.quantizationLabel}`
+										: snapshot.hardware.asrRuntime.toUpperCase()}
 							</span>
 						</div>
 
@@ -217,12 +222,16 @@ export function SettingsSection({
 							<div className="settings-runtime-summary-top">
 								<div>
 									<p className="surface-label">Active model</p>
-									<p className="settings-runtime-model">
-										{selectedModel?.label ?? "No model selected"}
-									</p>
+									<p className="settings-runtime-model">{selectedModelLabel}</p>
 								</div>
 								<span className="meta-chip active subtle">
-									{selectedModelRuntime ? "Running" : "Idle"}
+									{selectedCloudModel
+										? selectedModelReady
+											? "Cloud"
+											: "Needs setup"
+										: selectedModelRuntime
+											? "Running"
+											: "Idle"}
 								</span>
 							</div>
 
@@ -230,9 +239,11 @@ export function SettingsSection({
 								<div className="settings-metric-card">
 									<p className="surface-label">Engine</p>
 									<p className="settings-metric-value">
-										{selectedModelRuntime
-											? engineLabel(selectedModelRuntime.activeEngine)
-											: snapshot.hardware.asrRuntime.toUpperCase()}
+										{selectedCloudModel
+											? `${selectedModelProviderLabel ?? "Groq"} Cloud`
+											: selectedModelRuntime
+												? engineLabel(selectedModelRuntime.activeEngine)
+												: snapshot.hardware.asrRuntime.toUpperCase()}
 									</p>
 								</div>
 								<div className="settings-metric-card">

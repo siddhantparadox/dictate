@@ -15,7 +15,7 @@ import {
 	getThemePreference,
 	type ThemePreference,
 } from "@/mainview/theme";
-import type { ModelId } from "@/shared/models";
+import type { LocalModelId } from "@/shared/models";
 
 const SIDEBAR_COLLAPSED_STORAGE_KEY = "dictate.sidebar.collapsed";
 
@@ -39,7 +39,7 @@ function App() {
 		readStoredSidebarCollapsed(),
 	);
 	const [confirmDeleteModelId, setConfirmDeleteModelId] =
-		useState<ModelId | null>(null);
+		useState<LocalModelId | null>(null);
 
 	useEffect(() => {
 		if (!confirmDeleteModelId) {
@@ -103,9 +103,7 @@ function App() {
 						collapsed={isSidebarCollapsed}
 						onCollapsedChange={handleSidebarCollapsedChange}
 						engineIndicator={viewModel.engineIndicator}
-						selectedModelLabel={
-							viewModel.selectedModel?.label ?? "No model selected"
-						}
+						selectedModelLabel={viewModel.selectedModelLabel}
 						hotkeyLabel={viewModel.hotkeyLabel}
 					/>
 
@@ -128,7 +126,7 @@ function App() {
 								runtime={runtime}
 								snapshot={snapshot}
 								settings={settings}
-								selectedModelLabel={viewModel.selectedModel?.label ?? null}
+								selectedModelLabel={viewModel.selectedModelLabel}
 								confirmDeleteModelId={confirmDeleteModelId}
 								setConfirmDeleteModelId={setConfirmDeleteModelId}
 							/>

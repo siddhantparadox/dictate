@@ -5,7 +5,7 @@ import {
 	createInterface,
 	type Interface as ReadlineInterface,
 } from "node:readline";
-import type { ModelId } from "../shared/models";
+import type { LocalModelId } from "../shared/models";
 
 interface SidecarRequest {
 	request_id: string;
@@ -33,6 +33,11 @@ interface PendingRequest {
 
 interface SidecarTranscriptionPayload {
 	text: string;
+	latency_ms: number;
+}
+
+interface SidecarRecordedAudioPayload {
+	wav_path: string;
 	latency_ms: number;
 }
 
@@ -70,7 +75,7 @@ interface SidecarClientOptions {
 	onMicrophoneLevel?: (event: { level: number; atMs: number }) => void;
 }
 
-function isModelId(value: string): value is ModelId {
+function isModelId(value: string): value is LocalModelId {
 	return (
 		value === "nvidia/canary-qwen-2.5b" ||
 		value === "nvidia/parakeet-tdt-0.6b-v3" ||
@@ -362,7 +367,7 @@ export class SidecarClient {
 	}
 
 	async transcribeText(
-		modelId: ModelId,
+		modelId: LocalModelId,
 		inputText: string,
 	): Promise<{ text: string; latencyMs: number }> {
 		const result = await this.request<SidecarTranscriptionPayload>(
@@ -380,7 +385,7 @@ export class SidecarClient {
 	}
 
 	async transcribeMicrophone(
-		modelId: ModelId,
+		modelId: LocalModelId,
 		durationSeconds = 7,
 	): Promise<{ text: string; latencyMs: number }> {
 		const result = await this.request<SidecarTranscriptionPayload>(
@@ -405,7 +410,7 @@ export class SidecarClient {
 	}
 
 	async finishMicrophoneCapture(
-		modelId: ModelId,
+		modelId: LocalModelId,
 	): Promise<{ text: string; latencyMs: number }> {
 		const result = await this.request<SidecarTranscriptionPayload>(
 			"finish_microphone_capture",
@@ -422,7 +427,7 @@ export class SidecarClient {
 	}
 
 	async prepareModel(
-		modelId: ModelId,
+		modelId: LocalModelId,
 	): Promise<{ status: "installed"; latencyMs: number }> {
 		const result = await this.request<{
 			status: "installed";
@@ -442,7 +447,7 @@ export class SidecarClient {
 	}
 
 	async deleteModel(
-		modelId: ModelId,
+		modelId: LocalModelId,
 	): Promise<{ status: "deleted"; latencyMs: number; removedPaths: string[] }> {
 		const result = await this.request<SidecarDeleteModelPayload>(
 			"delete_model",
@@ -458,6 +463,39 @@ export class SidecarClient {
 			removedPaths: Array.isArray(result.removed_paths)
 				? result.removed_paths
 				: [],
+		};
+	}
+
+	async recordMicrophoneWav(
+		durationSeconds = 7,
+	): Promise<{ wavPath: string; latencyMs: number }> {
+		const result = await this.request<SidecarRecordedAudioPayload>(
+			"record_microphone_wav",
+			{
+				duration_seconds: durationSeconds,
+			},
+			180_000,
+		);
+
+		return {
+			wavPath: result.wav_path,
+			latencyMs: result.latency_ms,
+		};
+	}
+
+	async finishMicrophoneCaptureWav(): Promise<{
+		wavPath: string;
+		latencyMs: number;
+	}> {
+		const result = await this.request<SidecarRecordedAudioPayload>(
+			"finish_microphone_capture_wav",
+			{},
+			180_000,
+		);
+
+		return {
+			wavPath: result.wav_path,
+			latencyMs: result.latency_ms,
 		};
 	}
 

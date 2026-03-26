@@ -1,5 +1,5 @@
 import { Electroview } from "electrobun/view";
-import type { ModelId } from "@/shared/models";
+import type { GroqModelId, LocalModelId, ModelId } from "@/shared/models";
 import type {
 	AppSnapshot,
 	DeleteModelResult,
@@ -90,13 +90,16 @@ export const rpcClient = {
 		rpcProxy.request.updateSettings(next),
 	setDefaultModel: (modelId: ModelId) =>
 		rpcProxy.request.setDefaultModel({ modelId }),
+	configureGroqProvider: (apiKey: string, modelId: GroqModelId) =>
+		rpcProxy.request.configureGroqProvider({ apiKey, modelId }),
+	removeGroqProvider: () => rpcProxy.request.removeGroqProvider({}),
 	runMicrophoneTranscription: (
 		durationSeconds?: number,
 	): Promise<TranscriptionResult> =>
 		rpcProxy.request.runMicrophoneTranscription({ durationSeconds }),
-	prepareModel: (modelId: ModelId): Promise<PrepareModelResult> =>
+	prepareModel: (modelId: LocalModelId): Promise<PrepareModelResult> =>
 		rpcProxy.request.prepareModel({ modelId }),
-	deleteModel: (modelId: ModelId): Promise<DeleteModelResult> =>
+	deleteModel: (modelId: LocalModelId): Promise<DeleteModelResult> =>
 		rpcProxy.request.deleteModel({ modelId }),
 	installAccelerationRuntime: (
 		mode: "cuda",
