@@ -1,4 +1,4 @@
-import { dlopen, FFIType, type Library } from "bun:ffi";
+import { dlopen, FFIType, type Library, type Pointer, suffix } from "bun:ffi";
 import { spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, renameSync } from "node:fs";
@@ -581,6 +581,109 @@ let user32Library: Library<{
 	};
 }> | null = null;
 let getAsyncKeyStateFn: ((virtualKey: number) => number) | null = null;
+let user32WindowLibrary: Library<{
+	GetWindowLongW: {
+		args: [typeof FFIType.ptr, typeof FFIType.i32];
+		returns: typeof FFIType.i32;
+	};
+	SetWindowLongW: {
+		args: [typeof FFIType.ptr, typeof FFIType.i32, typeof FFIType.i32];
+		returns: typeof FFIType.i32;
+	};
+	SetWindowPos: {
+		args: [
+			typeof FFIType.ptr,
+			typeof FFIType.ptr,
+			typeof FFIType.i32,
+			typeof FFIType.i32,
+			typeof FFIType.i32,
+			typeof FFIType.i32,
+			typeof FFIType.u32,
+		];
+		returns: typeof FFIType.bool;
+	};
+	ShowWindow: {
+		args: [typeof FFIType.ptr, typeof FFIType.i32];
+		returns: typeof FFIType.bool;
+	};
+	LoadImageA: {
+		args: [
+			typeof FFIType.ptr,
+			typeof FFIType.cstring,
+			typeof FFIType.u32,
+			typeof FFIType.i32,
+			typeof FFIType.i32,
+			typeof FFIType.u32,
+		];
+		returns: typeof FFIType.ptr;
+	};
+	SendMessageW: {
+		args: [
+			typeof FFIType.ptr,
+			typeof FFIType.u32,
+			typeof FFIType.u64,
+			typeof FFIType.ptr,
+		];
+		returns: typeof FFIType.ptr;
+	};
+	SetClassLongPtrW: {
+		args: [typeof FFIType.ptr, typeof FFIType.i32, typeof FFIType.ptr];
+		returns: typeof FFIType.ptr;
+	};
+	DestroyIcon: {
+		args: [typeof FFIType.ptr];
+		returns: typeof FFIType.bool;
+	};
+}> | null = null;
+let getWindowLongWFn: ((windowPtr: Pointer, index: number) => number) | null =
+	null;
+let setWindowLongWFn:
+	| ((windowPtr: Pointer, index: number, nextValue: number) => number)
+	| null = null;
+let setWindowPosFn:
+	| ((
+			windowPtr: Pointer,
+			insertAfter: Pointer | null,
+			x: number,
+			y: number,
+			width: number,
+			height: number,
+			flags: number,
+	  ) => boolean)
+	| null = null;
+let showWindowFn: ((windowPtr: Pointer, command: number) => boolean) | null =
+	null;
+let loadImageAFn:
+	| ((
+			instance: Pointer | null,
+			name: NodeJS.TypedArray,
+			imageType: number,
+			width: number,
+			height: number,
+			flags: number,
+	  ) => Pointer)
+	| null = null;
+let sendMessageWFn:
+	| ((
+			windowPtr: Pointer,
+			message: number,
+			wParam: number,
+			lParam: Pointer | null,
+	  ) => Pointer)
+	| null = null;
+let setClassLongPtrWFn:
+	| ((windowPtr: Pointer, index: number, value: Pointer | null) => Pointer)
+	| null = null;
+let destroyIconFn: ((iconHandle: Pointer) => boolean) | null = null;
+let nativeWindowIconLibrary: Library<{
+	setWindowIcon: {
+		args: [typeof FFIType.ptr, typeof FFIType.cstring];
+		returns: typeof FFIType.void;
+	};
+}> | null = null;
+let setNativeWindowIconFn:
+	| ((windowPtr: Pointer, iconPath: NodeJS.TypedArray) => void)
+	| null = null;
 
 let currentPill: AppSnapshot["pill"] = {
 	state: "hidden",
@@ -593,6 +696,61 @@ const NO_SPEECH_PATTERNS = [
 	"no speech detected",
 	"returned no generated tokens",
 ];
+const GWL_EXSTYLE = -20;
+const WS_EX_TOOLWINDOW = 0x00000080;
+const WS_EX_APPWINDOW = 0x00040000;
+const SW_HIDE = 0;
+const SW_SHOWNA = 8;
+const SWP_NOSIZE = 0x0001;
+const SWP_NOMOVE = 0x0002;
+const SWP_NOZORDER = 0x0004;
+const SWP_NOACTIVATE = 0x0010;
+const SWP_FRAMECHANGED = 0x0020;
+const IMAGE_ICON = 1;
+const LR_LOADFROMFILE = 0x0010;
+const WM_SETICON = 0x0080;
+const ICON_SMALL = 0;
+const ICON_BIG = 1;
+const ICON_SMALL2 = 2;
+const GCLP_HICON = -14;
+const GCLP_HICONSM = -34;
+const APP_ICON_CANDIDATE_PATHS = [
+	resolve(process.cwd(), "icon.ico"),
+	resolve(process.cwd(), "..", "icon.ico"),
+	resolve(import.meta.dir, "..", "..", "..", "icon.ico"),
+	resolve(import.meta.dir, "..", "..", "..", "..", "icon.ico"),
+	resolve(import.meta.dir, "..", "..", "app.ico"),
+	resolve(process.cwd(), "..", "Resources", "app.ico"),
+	resolve(
+		process.cwd(),
+		"build",
+		"dev-win-x64",
+		"dictate-dev",
+		"Resources",
+		"app.ico",
+	),
+	resolve(
+		process.cwd(),
+		"build",
+		"canary-win-x64",
+		"dictate-canary",
+		"Resources",
+		"app.ico",
+	),
+	resolve(
+		process.cwd(),
+		"build",
+		"stable-win-x64",
+		"dictate",
+		"Resources",
+		"app.ico",
+	),
+	resolve(process.cwd(), "icon.png"),
+	resolve(process.cwd(), "..", "icon.png"),
+	resolve(import.meta.dir, "..", "..", "..", "icon.png"),
+	resolve(import.meta.dir, "..", "..", "..", "..", "icon.png"),
+] as const;
+const loadedWindowIcons = new Map<string, Pointer>();
 
 let hardwareSnapshot = buildHardwareSnapshotForRuntime(initialRuntime.runtime);
 let modelsCache = storage.getModels();
@@ -1243,6 +1401,320 @@ function isVirtualKeyPressed(virtualKey: number): boolean {
 	return (getAsyncKeyStateFn(virtualKey) & 0x8000) === 0x8000;
 }
 
+function ensureWindowsWindowStyleApi(): boolean {
+	if (process.platform !== "win32") {
+		return false;
+	}
+
+	if (
+		getWindowLongWFn &&
+		setWindowLongWFn &&
+		setWindowPosFn &&
+		showWindowFn &&
+		loadImageAFn &&
+		sendMessageWFn &&
+		setClassLongPtrWFn &&
+		destroyIconFn
+	) {
+		return true;
+	}
+
+	try {
+		user32WindowLibrary = dlopen("user32.dll", {
+			GetWindowLongW: {
+				args: [FFIType.ptr, FFIType.i32],
+				returns: FFIType.i32,
+			},
+			SetWindowLongW: {
+				args: [FFIType.ptr, FFIType.i32, FFIType.i32],
+				returns: FFIType.i32,
+			},
+			SetWindowPos: {
+				args: [
+					FFIType.ptr,
+					FFIType.ptr,
+					FFIType.i32,
+					FFIType.i32,
+					FFIType.i32,
+					FFIType.i32,
+					FFIType.u32,
+				],
+				returns: FFIType.bool,
+			},
+			ShowWindow: {
+				args: [FFIType.ptr, FFIType.i32],
+				returns: FFIType.bool,
+			},
+			LoadImageA: {
+				args: [
+					FFIType.ptr,
+					FFIType.cstring,
+					FFIType.u32,
+					FFIType.i32,
+					FFIType.i32,
+					FFIType.u32,
+				],
+				returns: FFIType.ptr,
+			},
+			SendMessageW: {
+				args: [FFIType.ptr, FFIType.u32, FFIType.u64, FFIType.ptr],
+				returns: FFIType.ptr,
+			},
+			SetClassLongPtrW: {
+				args: [FFIType.ptr, FFIType.i32, FFIType.ptr],
+				returns: FFIType.ptr,
+			},
+			DestroyIcon: {
+				args: [FFIType.ptr],
+				returns: FFIType.bool,
+			},
+		});
+		getWindowLongWFn = user32WindowLibrary.symbols.GetWindowLongW as (
+			windowPtr: Pointer,
+			index: number,
+		) => number;
+		setWindowLongWFn = user32WindowLibrary.symbols.SetWindowLongW as (
+			windowPtr: Pointer,
+			index: number,
+			nextValue: number,
+		) => number;
+		setWindowPosFn = user32WindowLibrary.symbols.SetWindowPos as (
+			windowPtr: Pointer,
+			insertAfter: Pointer | null,
+			x: number,
+			y: number,
+			width: number,
+			height: number,
+			flags: number,
+		) => boolean;
+		showWindowFn = user32WindowLibrary.symbols.ShowWindow as (
+			windowPtr: Pointer,
+			command: number,
+		) => boolean;
+		loadImageAFn = user32WindowLibrary.symbols.LoadImageA as (
+			instance: Pointer | null,
+			name: NodeJS.TypedArray,
+			imageType: number,
+			width: number,
+			height: number,
+			flags: number,
+		) => Pointer;
+		sendMessageWFn = user32WindowLibrary.symbols.SendMessageW as (
+			windowPtr: Pointer,
+			message: number,
+			wParam: number,
+			lParam: Pointer | null,
+		) => Pointer;
+		setClassLongPtrWFn = user32WindowLibrary.symbols.SetClassLongPtrW as (
+			windowPtr: Pointer,
+			index: number,
+			value: Pointer | null,
+		) => Pointer;
+		destroyIconFn = user32WindowLibrary.symbols.DestroyIcon as (
+			iconHandle: Pointer,
+		) => boolean;
+		return true;
+	} catch (error) {
+		console.error(
+			"Failed to initialize Windows window style API.",
+			error instanceof Error ? error.message : error,
+		);
+		return false;
+	}
+}
+
+function resolveAppIconPath(): string | null {
+	for (const candidate of APP_ICON_CANDIDATE_PATHS) {
+		if (existsSync(candidate)) {
+			return candidate;
+		}
+	}
+	return null;
+}
+
+function loadWindowsIconHandle(iconPath: string, size: number): Pointer | null {
+	if (!ensureWindowsWindowStyleApi() || !loadImageAFn) {
+		return null;
+	}
+
+	const cacheKey = `${iconPath}:${size}`;
+	const cachedHandle = loadedWindowIcons.get(cacheKey);
+	if (cachedHandle) {
+		return cachedHandle;
+	}
+
+	const iconHandle = loadImageAFn(
+		null,
+		Buffer.from(`${iconPath}\0`, "utf8"),
+		IMAGE_ICON,
+		size,
+		size,
+		LR_LOADFROMFILE,
+	);
+	if (!iconHandle) {
+		return null;
+	}
+
+	loadedWindowIcons.set(cacheKey, iconHandle);
+	return iconHandle;
+}
+
+function applyWindowIconViaWin32(
+	windowRef: BrowserWindow,
+	iconPath: string,
+): boolean {
+	if (
+		!ensureWindowsWindowStyleApi() ||
+		!sendMessageWFn ||
+		!setClassLongPtrWFn
+	) {
+		return false;
+	}
+
+	const smallIcon = loadWindowsIconHandle(iconPath, 16);
+	const largeIcon = loadWindowsIconHandle(iconPath, 32) ?? smallIcon;
+	if (!smallIcon && !largeIcon) {
+		return false;
+	}
+
+	if (largeIcon) {
+		setClassLongPtrWFn(windowRef.ptr, GCLP_HICON, largeIcon);
+		sendMessageWFn(windowRef.ptr, WM_SETICON, ICON_BIG, largeIcon);
+	}
+	if (smallIcon) {
+		setClassLongPtrWFn(windowRef.ptr, GCLP_HICONSM, smallIcon);
+		sendMessageWFn(windowRef.ptr, WM_SETICON, ICON_SMALL, smallIcon);
+		sendMessageWFn(windowRef.ptr, WM_SETICON, ICON_SMALL2, smallIcon);
+	}
+	setWindowPosFn?.(
+		windowRef.ptr,
+		null,
+		0,
+		0,
+		0,
+		0,
+		SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED,
+	);
+	return true;
+}
+
+function ensureNativeWindowIconApi(): boolean {
+	if (setNativeWindowIconFn) {
+		return true;
+	}
+
+	try {
+		const nativeWrapperPath = join(process.cwd(), `libNativeWrapper.${suffix}`);
+		nativeWindowIconLibrary = dlopen(nativeWrapperPath, {
+			setWindowIcon: {
+				args: [FFIType.ptr, FFIType.cstring],
+				returns: FFIType.void,
+			},
+		});
+		setNativeWindowIconFn = nativeWindowIconLibrary.symbols.setWindowIcon as (
+			windowPtr: Pointer,
+			iconPath: NodeJS.TypedArray,
+		) => void;
+		return true;
+	} catch (error) {
+		console.error(
+			"Failed to initialize native window icon API.",
+			error instanceof Error ? error.message : error,
+		);
+		return false;
+	}
+}
+
+function applyWindowIcon(windowRef: BrowserWindow): void {
+	if (process.platform !== "win32") {
+		return;
+	}
+
+	const iconPath = resolveAppIconPath();
+	if (!iconPath) {
+		return;
+	}
+
+	try {
+		if (
+			iconPath.toLowerCase().endsWith(".ico") &&
+			applyWindowIconViaWin32(windowRef, iconPath)
+		) {
+			return;
+		}
+		if (!ensureNativeWindowIconApi() || !setNativeWindowIconFn) {
+			return;
+		}
+		setNativeWindowIconFn(windowRef.ptr, Buffer.from(`${iconPath}\0`, "utf8"));
+	} catch (error) {
+		console.error(
+			`Failed to set window icon from ${iconPath}.`,
+			error instanceof Error ? error.message : error,
+		);
+	}
+}
+
+function hideNativePillWindow(windowRef: BrowserWindow): void {
+	if (process.platform !== "win32") {
+		windowRef.setFrame(-10_000, -10_000, PILL_WINDOW_WIDTH, PILL_WINDOW_HEIGHT);
+		return;
+	}
+
+	if (!ensureWindowsWindowStyleApi() || !showWindowFn) {
+		windowRef.setFrame(-10_000, -10_000, PILL_WINDOW_WIDTH, PILL_WINDOW_HEIGHT);
+		return;
+	}
+
+	showWindowFn(windowRef.ptr, SW_HIDE);
+}
+
+function showNativePillWindow(windowRef: BrowserWindow): void {
+	if (process.platform !== "win32") {
+		return;
+	}
+
+	if (!ensureWindowsWindowStyleApi() || !showWindowFn) {
+		return;
+	}
+
+	showWindowFn(windowRef.ptr, SW_SHOWNA);
+}
+
+function configureWindowsPillWindow(windowRef: BrowserWindow): void {
+	if (process.platform !== "win32") {
+		return;
+	}
+
+	if (
+		!ensureWindowsWindowStyleApi() ||
+		!getWindowLongWFn ||
+		!setWindowLongWFn ||
+		!setWindowPosFn
+	) {
+		return;
+	}
+
+	const currentExtendedStyle = getWindowLongWFn(windowRef.ptr, GWL_EXSTYLE) | 0;
+	const nextExtendedStyle =
+		((currentExtendedStyle | WS_EX_TOOLWINDOW) & ~WS_EX_APPWINDOW) | 0;
+
+	hideNativePillWindow(windowRef);
+
+	if (nextExtendedStyle !== currentExtendedStyle) {
+		setWindowLongWFn(windowRef.ptr, GWL_EXSTYLE, nextExtendedStyle);
+	}
+
+	setWindowPosFn(
+		windowRef.ptr,
+		null,
+		0,
+		0,
+		0,
+		0,
+		SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED,
+	);
+}
+
 function stopModifierHotkeyPolling(): void {
 	if (modifierHotkeyTimer) {
 		clearInterval(modifierHotkeyTimer);
@@ -1459,7 +1931,8 @@ function getDisplayForCursor() {
 }
 
 function positionPillWindow(): void {
-	if (!pillWindow) {
+	const windowRef = ensurePillWindow();
+	if (!windowRef) {
 		return;
 	}
 
@@ -1473,14 +1946,15 @@ function positionPillWindow(): void {
 			PILL_WINDOW_HEIGHT -
 			PILL_WINDOW_BOTTOM_MARGIN,
 	);
-	pillWindow.setFrame(x, y, PILL_WINDOW_WIDTH, PILL_WINDOW_HEIGHT);
+	windowRef.setFrame(x, y, PILL_WINDOW_WIDTH, PILL_WINDOW_HEIGHT);
+	showNativePillWindow(windowRef);
 }
 
 function hidePillWindow(): void {
 	if (!pillWindow) {
 		return;
 	}
-	pillWindow.setFrame(-10_000, -10_000, PILL_WINDOW_WIDTH, PILL_WINDOW_HEIGHT);
+	hideNativePillWindow(pillWindow);
 }
 
 function stopRecordingTicker(): void {
@@ -2230,6 +2704,9 @@ function createMainWindow(viewUrl: string): BrowserWindow {
 		setTimeout(() => {
 			syncWindowFrameToContentBounds(windowRef, minimumWidth, minimumHeight);
 		}, 0);
+		setTimeout(() => {
+			applyWindowIcon(windowRef);
+		}, 0);
 
 		const resyncContentBounds = () => {
 			syncWindowFrameToContentBounds(windowRef, minimumWidth, minimumHeight);
@@ -2238,6 +2715,9 @@ function createMainWindow(viewUrl: string): BrowserWindow {
 		windowRef.webview.on("dom-ready", () => {
 			setTimeout(resyncContentBounds, 0);
 			setTimeout(resyncContentBounds, 120);
+			setTimeout(() => {
+				applyWindowIcon(windowRef);
+			}, 0);
 		});
 	}
 
@@ -2255,6 +2735,8 @@ function createMainWindow(viewUrl: string): BrowserWindow {
 			mainWindow = null;
 		}
 	});
+
+	applyWindowIcon(windowRef);
 
 	return windowRef;
 }
@@ -2301,7 +2783,23 @@ function createPillWindow(mainUrl: string): BrowserWindow {
 		},
 	});
 	windowRef.setAlwaysOnTop(true);
+	configureWindowsPillWindow(windowRef);
+	hideNativePillWindow(windowRef);
 	return windowRef;
+}
+
+function ensurePillWindow(): BrowserWindow | null {
+	if (pillWindow) {
+		return pillWindow;
+	}
+
+	if (!mainViewUrl) {
+		console.error("[window] cannot create pill window before bootstrap.");
+		return null;
+	}
+
+	pillWindow = createPillWindow(mainViewUrl);
+	return pillWindow;
 }
 
 async function bootstrap(): Promise<void> {
@@ -2313,7 +2811,6 @@ async function bootstrap(): Promise<void> {
 			"[startup] autostart launch detected; main window stays hidden.",
 		);
 	}
-	pillWindow = createPillWindow(mainViewUrl);
 	trayRef = createTray();
 
 	const settings = storage.getSettings();
@@ -2362,6 +2859,29 @@ Electrobun.events.on("before-quit", () => {
 		user32Library.close();
 		user32Library = null;
 		getAsyncKeyStateFn = null;
+	}
+	if (user32WindowLibrary) {
+		if (destroyIconFn) {
+			for (const iconHandle of loadedWindowIcons.values()) {
+				destroyIconFn(iconHandle);
+			}
+			loadedWindowIcons.clear();
+		}
+		user32WindowLibrary.close();
+		user32WindowLibrary = null;
+		getWindowLongWFn = null;
+		setWindowLongWFn = null;
+		setWindowPosFn = null;
+		showWindowFn = null;
+		loadImageAFn = null;
+		sendMessageWFn = null;
+		setClassLongPtrWFn = null;
+		destroyIconFn = null;
+	}
+	if (nativeWindowIconLibrary) {
+		nativeWindowIconLibrary.close();
+		nativeWindowIconLibrary = null;
+		setNativeWindowIconFn = null;
 	}
 	sidecar.stop();
 	storage.close();
