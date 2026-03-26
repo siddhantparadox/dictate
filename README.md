@@ -12,6 +12,7 @@ Dictate is a Windows-first desktop app built with:
 - React for the app UI
 - A Python sidecar for speech recognition
 - Local ASR models from Moonshine and NVIDIA
+- Optional cloud transcription through Groq with a bring-your-own API key flow
 
 The app is designed around one primary interaction:
 
@@ -24,9 +25,11 @@ The app is designed around one primary interaction:
 ## Current Scope
 
 - Local, on-device transcription
+- Optional Groq cloud transcription with saved local API key configuration
 - Global hotkey: `Ctrl+Shift`
 - Live pill overlay while recording
 - Model download, warm-up, selection, and deletion
+- Local and cloud model selection from the `Models` page
 - CPU and NVIDIA CUDA runtime modes
 - Recent transcription history
 - Light and dark glassmorphism UI
@@ -37,9 +40,16 @@ The app is designed around one primary interaction:
 
 1. Open Dictate.
 2. Go to `Models`.
-3. Download the model you want to use.
-4. Keep `ASR Acceleration` on `Auto` unless you specifically want to force `CPU` or `CUDA`.
-5. Select the model.
+3. Choose `Local` or `Cloud`.
+4. For `Local`, download the model you want to use.
+5. For `Cloud`, connect Groq with your API key and select a Groq Whisper model.
+6. Keep `ASR Acceleration` on `Auto` unless you specifically want to force `CPU` or `CUDA`.
+7. Select the model you want as default.
+
+Groq setup:
+
+- Get an API key from [Groq API Keys](https://console.groq.com/keys/)
+- Groq docs overview: [Groq Docs](https://console.groq.com/docs/overview)
 
 ### Dictation Flow
 
@@ -53,10 +63,12 @@ The app is designed around one primary interaction:
 
 - `Overview`: current model, runtime state, latest transcript, warnings, and readiness
 - `History`: recent transcription jobs and outcomes
-- `Models`: install state, download progress, runtime fit, select/delete actions
+- `Models`: local vs cloud model source, install state, Groq connection state, and select/delete actions
 - `Settings`: acceleration mode, appearance, paste behavior, and debug flags
 
 ## Models
+
+### Local Models
 
 | Model | Runtime | Size | Notes |
 | --- | --- | --- | --- |
@@ -64,6 +76,15 @@ The app is designed around one primary interaction:
 | `Moonshine Medium Streaming` | CPU | `1.06 GB` | Balanced default for local CPU dictation |
 | `NVIDIA Parakeet-TDT-0.6B-v3` | NVIDIA GPU | `2.51 GB` | Multilingual model with strong GPU accuracy |
 | `NVIDIA Canary-Qwen-2.5B` | NVIDIA GPU | `5.12 GB` | Larger English model for stronger NVIDIA GPUs |
+
+### Cloud Models
+
+Groq cloud transcription is optional and uses your own Groq API key.
+
+| Provider | Model | Notes |
+| --- | --- | --- |
+| `Groq` | `whisper-large-v3-turbo` | Recommended default for cloud dictation: faster and lower cost |
+| `Groq` | `whisper-large-v3` | Higher accuracy option with translation support |
 
 ## Runtime Modes
 
@@ -143,6 +164,7 @@ Key locations:
 - Hugging Face cache: `%USERPROFILE%\.dictateapp\models\huggingface\hub`
 - Moonshine cache: `%USERPROFILE%\.dictateapp\models\moonshine`
 - Torch cache: `%USERPROFILE%\.dictateapp\torch`
+- Cloud provider config: `%USERPROFILE%\.dictateapp\providers.json`
 
 You can override the root with:
 
@@ -150,7 +172,7 @@ You can override the root with:
 DICTATE_HOME
 ```
 
-App settings and transcription history are stored in the app user data directory in a local SQLite database.
+App settings and transcription history are stored in the app user data directory in a local SQLite database. Groq BYO-key configuration is stored separately under `.dictateapp\providers.json`.
 
 ## Repository Layout
 
