@@ -75,6 +75,7 @@ const VK_LCONTROL = 0xa2;
 const VK_RCONTROL = 0xa3;
 const VK_LSHIFT = 0xa0;
 const VK_RSHIFT = 0xa1;
+const PROCESS_PER_MONITOR_DPI_AWARE = 2;
 
 type WindowRpc = {
 	send: {
@@ -579,8 +580,21 @@ let user32Library: Library<{
 		args: [typeof FFIType.i32];
 		returns: typeof FFIType.i16;
 	};
+	SetProcessDPIAware: {
+		args: [];
+		returns: typeof FFIType.bool;
+	};
 }> | null = null;
 let getAsyncKeyStateFn: ((virtualKey: number) => number) | null = null;
+let setProcessDPIAwareFn: (() => boolean) | null = null;
+let shcoreLibrary: Library<{
+	SetProcessDpiAwareness: {
+		args: [typeof FFIType.i32];
+		returns: typeof FFIType.i32;
+	};
+}> | null = null;
+let setProcessDpiAwarenessFn: ((awareness: number) => number) | null = null;
+let windowsDpiAwarenessConfigured = false;
 let user32WindowLibrary: Library<{
 	GetWindowLongW: {
 		args: [typeof FFIType.ptr, typeof FFIType.i32];
@@ -1365,6 +1379,58 @@ function normalizeHotkey(hotkey: string): string {
 	return hotkey.replace(/\s+/g, "").toLowerCase();
 }
 
+function configureWindowsDpiAwareness(): void {
+	if (process.platform !== "win32" || windowsDpiAwarenessConfigured) {
+		return;
+	}
+
+	windowsDpiAwarenessConfigured = true;
+
+	try {
+		shcoreLibrary = dlopen("shcore.dll", {
+			SetProcessDpiAwareness: {
+				args: [FFIType.i32],
+				returns: FFIType.i32,
+			},
+		});
+		setProcessDpiAwarenessFn = shcoreLibrary.symbols.SetProcessDpiAwareness as (
+			awareness: number,
+		) => number;
+		const result = setProcessDpiAwarenessFn(PROCESS_PER_MONITOR_DPI_AWARE);
+		if (result === 0 || result === -2147024891) {
+			return;
+		}
+	} catch (error) {
+		console.warn(
+			"Failed to set per-monitor DPI awareness via Shcore.",
+			error instanceof Error ? error.message : error,
+		);
+	}
+
+	try {
+		if (!user32Library) {
+			user32Library = dlopen("user32.dll", {
+				GetAsyncKeyState: {
+					args: [FFIType.i32],
+					returns: FFIType.i16,
+				},
+				SetProcessDPIAware: {
+					args: [],
+					returns: FFIType.bool,
+				},
+			});
+		}
+		setProcessDPIAwareFn = user32Library.symbols
+			.SetProcessDPIAware as () => boolean;
+		setProcessDPIAwareFn();
+	} catch (error) {
+		console.warn(
+			"Failed to enable Windows DPI awareness.",
+			error instanceof Error ? error.message : error,
+		);
+	}
+}
+
 function ensureWindowsKeyStateApi(): boolean {
 	if (process.platform !== "win32") {
 		return false;
@@ -1380,10 +1446,16 @@ function ensureWindowsKeyStateApi(): boolean {
 				args: [FFIType.i32],
 				returns: FFIType.i16,
 			},
+			SetProcessDPIAware: {
+				args: [],
+				returns: FFIType.bool,
+			},
 		});
 		getAsyncKeyStateFn = user32Library.symbols.GetAsyncKeyState as (
 			virtualKey: number,
 		) => number;
+		setProcessDPIAwareFn = user32Library.symbols
+			.SetProcessDPIAware as () => boolean;
 		return true;
 	} catch (error) {
 		console.error(
@@ -2859,6 +2931,12 @@ Electrobun.events.on("before-quit", () => {
 		user32Library.close();
 		user32Library = null;
 		getAsyncKeyStateFn = null;
+		setProcessDPIAwareFn = null;
+	}
+	if (shcoreLibrary) {
+		shcoreLibrary.close();
+		shcoreLibrary = null;
+		setProcessDpiAwarenessFn = null;
 	}
 	if (user32WindowLibrary) {
 		if (destroyIconFn) {
@@ -2897,4 +2975,5 @@ Electrobun.events.on("before-quit", () => {
 	}
 });
 
+configureWindowsDpiAwareness();
 void bootstrap();

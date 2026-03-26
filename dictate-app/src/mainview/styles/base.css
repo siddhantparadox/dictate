@@ -1,23 +1,23 @@
-@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Manrope:wght@600;700;800&display=swap");
 @import "tailwindcss";
 
 :root {
 	--font-display:
-		Manrope, "Segoe UI Variable Display", "Aptos Display", "SF Pro Display",
-		"Helvetica Neue", ui-sans-serif, system-ui, sans-serif;
+		"Segoe UI Variable Display", "Segoe UI Variable Text", "Segoe UI",
+		-apple-system, BlinkMacSystemFont, "SF Pro Display", "Helvetica Neue",
+		Arial, sans-serif;
 	--font-sans:
-		Inter, "Segoe UI Variable Text", "Aptos", "SF Pro Text", "Helvetica Neue",
-		ui-sans-serif, system-ui, sans-serif;
+		"Segoe UI Variable Text", "Segoe UI", -apple-system, BlinkMacSystemFont,
+		"SF Pro Text", "Helvetica Neue", Arial, sans-serif;
 	--font-mono:
-		"Cascadia Mono", "IBM Plex Mono", "SFMono-Regular", "JetBrains Mono",
-		ui-monospace, monospace;
+		"Cascadia Mono", Consolas, "SFMono-Regular", "IBM Plex Mono",
+		"JetBrains Mono", ui-monospace, monospace;
 	--radius-sm: 0.25rem;
 	--radius-md: 0.5rem;
 	--radius-lg: 0.75rem;
 
 	--text-primary: #2f3430;
-	--text-secondary: #5c605c;
-	--text-tertiary: #777c77;
+	--text-secondary: #505550;
+	--text-tertiary: #666b66;
 
 	--app-bg: #faf9f6;
 	--background-surface: #faf9f6;
@@ -84,8 +84,8 @@
 
 html[data-theme="dark"] {
 	--text-primary: #f1ece6;
-	--text-secondary: #bfb8af;
-	--text-tertiary: #928b83;
+	--text-secondary: #cfc7bf;
+	--text-tertiary: #ada59c;
 
 	--app-bg: #171917;
 	--background-surface: #171917;
@@ -171,8 +171,6 @@ body {
 	margin: 0;
 	font-family: var(--font-sans);
 	color: var(--text-primary);
-	-webkit-font-smoothing: antialiased;
-	text-rendering: optimizeLegibility;
 	transition:
 		background 220ms ease,
 		color 180ms ease;

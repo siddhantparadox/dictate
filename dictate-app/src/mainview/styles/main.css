@@ -30,7 +30,7 @@
 	padding: 0.65rem 0.9rem;
 	border-radius: 999px;
 	background: var(--panel-subtle);
-	font-size: 0.82rem;
+	font-size: 0.875rem;
 	font-weight: 600;
 	color: var(--text-primary);
 }
@@ -133,7 +133,7 @@
 
 .brand-subtitle {
 	margin: 0.12rem 0 0;
-	font-size: 0.68rem;
+	font-size: 0.75rem;
 	line-height: 1.4;
 	color: var(--text-secondary);
 }
@@ -186,7 +186,7 @@
 	background: transparent;
 	color: color-mix(in srgb, var(--text-secondary) 88%, transparent);
 	font-family: var(--font-display);
-	font-size: 0.84rem;
+	font-size: 0.875rem;
 	font-weight: 600;
 	text-align: left;
 	cursor: pointer;
@@ -253,9 +253,9 @@
 
 .sidebar-meta-label {
 	margin: 0;
-	font-size: 0.64rem;
+	font-size: 0.75rem;
 	font-weight: 700;
-	letter-spacing: 0.16em;
+	letter-spacing: 0.1em;
 	text-transform: uppercase;
 	color: var(--text-tertiary);
 }
@@ -263,7 +263,7 @@
 .sidebar-meta-text,
 .sidebar-hotkey {
 	margin: 0;
-	font-size: 0.74rem;
+	font-size: 0.8125rem;
 	line-height: 1.55;
 	color: var(--text-primary);
 }
@@ -327,7 +327,7 @@
 .section-copy {
 	margin: 0.55rem 0 0;
 	max-width: 60ch;
-	font-size: 0.82rem;
+	font-size: 0.875rem;
 	line-height: 1.6;
 	color: var(--text-secondary);
 }
@@ -340,9 +340,9 @@
 .surface-label,
 .section-count {
 	margin: 0;
-	font-size: 0.64rem;
+	font-size: 0.75rem;
 	font-weight: 700;
-	letter-spacing: 0.16em;
+	letter-spacing: 0.1em;
 	text-transform: uppercase;
 	color: var(--text-tertiary);
 }
@@ -355,7 +355,7 @@
 }
 
 .surface-label {
-	letter-spacing: 0.14em;
+	letter-spacing: 0.08em;
 }
 
 .status-pill,
@@ -369,7 +369,7 @@
 	padding: 0.24rem 0.58rem;
 	border-radius: 999px;
 	background: var(--panel-subtle);
-	font-size: 0.66rem;
+	font-size: 0.75rem;
 	font-weight: 700;
 	letter-spacing: 0.06em;
 	color: var(--text-secondary);
@@ -469,7 +469,7 @@
 .model-hint,
 .settings-detail {
 	margin: 0;
-	font-size: 0.74rem;
+	font-size: 0.8125rem;
 	line-height: 1.6;
 	color: var(--text-secondary);
 }
@@ -495,9 +495,9 @@
 
 .transcript-stamp {
 	margin: 0;
-	font-size: 0.64rem;
+	font-size: 0.75rem;
 	font-weight: 700;
-	letter-spacing: 0.14em;
+	letter-spacing: 0.08em;
 	text-transform: uppercase;
 	color: var(--text-tertiary);
 }
@@ -522,7 +522,7 @@
 .sheet-title-row h2 {
 	margin: 0;
 	font-family: var(--font-display);
-	font-size: 0.96rem;
+	font-size: 1rem;
 	font-weight: 700;
 	letter-spacing: -0.02em;
 	color: var(--text-primary);
@@ -537,7 +537,7 @@
 .transcript-featured,
 .history-text {
 	margin: 0;
-	font-size: 0.96rem;
+	font-size: 1rem;
 	line-height: 1.72;
 	color: var(--text-primary);
 	white-space: pre-wrap;
@@ -547,9 +547,9 @@
 	display: inline-flex;
 	align-items: center;
 	gap: 0.9rem;
-	font-size: 0.64rem;
+	font-size: 0.75rem;
 	font-weight: 700;
-	letter-spacing: 0.12em;
+	letter-spacing: 0.08em;
 	text-transform: uppercase;
 	color: var(--text-tertiary);
 }
@@ -609,7 +609,7 @@
 .history-row-time,
 .settings-value {
 	margin: 0;
-	font-size: 0.72rem;
+	font-size: 0.8125rem;
 	font-weight: 600;
 	color: var(--text-secondary);
 }
@@ -646,14 +646,14 @@
 .settings-title,
 .model-title {
 	margin: 0;
-	font-size: 0.84rem;
+	font-size: 0.875rem;
 	font-weight: 600;
 	color: var(--text-primary);
 }
 
 .quick-test-detail {
 	margin: 0;
-	font-size: 0.72rem;
+	font-size: 0.8125rem;
 	color: var(--text-secondary);
 }
 
@@ -674,12 +674,12 @@
 	align-items: baseline;
 	justify-content: space-between;
 	gap: 0.9rem;
-	font-size: 0.76rem;
+	font-size: 0.8125rem;
 	color: var(--text-secondary);
 }
 
 .overview-summary-row strong {
-	font-size: 0.82rem;
+	font-size: 0.875rem;
 	font-weight: 600;
 	color: var(--text-primary);
 	text-align: right;
@@ -701,7 +701,7 @@
 
 .overview-tip-copy {
 	margin: 0;
-	font-size: 0.82rem;
+	font-size: 0.875rem;
 	line-height: 1.7;
 	color: var(--button-primary-text);
 }
@@ -728,7 +728,7 @@
 }
 
 .overview-message-list li {
-	font-size: 0.76rem;
+	font-size: 0.8125rem;
 	line-height: 1.55;
 	color: var(--text-primary);
 }
@@ -776,9 +776,9 @@
 }
 
 .model-head-cell {
-	font-size: 0.64rem;
+	font-size: 0.75rem;
 	font-weight: 700;
-	letter-spacing: 0.14em;
+	letter-spacing: 0.08em;
 	text-transform: uppercase;
 	color: var(--text-tertiary);
 }
@@ -863,7 +863,7 @@
 .model-status-cell,
 .model-actions-cell {
 	padding-top: 0.12rem;
-	font-size: 0.76rem;
+	font-size: 0.8125rem;
 	color: var(--text-primary);
 }
 
@@ -894,7 +894,7 @@
 	display: inline-flex;
 	align-items: center;
 	gap: 0.38rem;
-	font-size: 0.74rem;
+	font-size: 0.8125rem;
 	font-weight: 600;
 	color: var(--text-secondary);
 }
@@ -958,7 +958,7 @@
 
 .model-progress-label {
 	margin: 0;
-	font-size: 0.66rem;
+	font-size: 0.75rem;
 	line-height: 1.5;
 	color: var(--text-secondary);
 }
@@ -973,7 +973,7 @@
 .model-action-link {
 	padding: 0;
 	background: transparent;
-	font-size: 0.66rem;
+	font-size: 0.75rem;
 	font-weight: 700;
 	letter-spacing: 0.08em;
 	text-transform: uppercase;
@@ -1010,7 +1010,7 @@
 
 .model-delete-copy {
 	margin: 0;
-	font-size: 0.74rem;
+	font-size: 0.8125rem;
 	line-height: 1.5;
 	color: var(--text-primary);
 }
@@ -1059,9 +1059,9 @@
 .history-group-label,
 .settings-section-title {
 	margin: 0;
-	font-size: 0.68rem;
+	font-size: 0.75rem;
 	font-weight: 700;
-	letter-spacing: 0.16em;
+	letter-spacing: 0.1em;
 	text-transform: uppercase;
 	color: var(--text-tertiary);
 	white-space: nowrap;
@@ -1143,7 +1143,7 @@
 
 .history-model {
 	margin: 0;
-	font-size: 0.72rem;
+	font-size: 0.8125rem;
 	font-weight: 600;
 	color: var(--text-secondary);
 }
@@ -1292,7 +1292,7 @@
 .settings-metric-value {
 	margin: 0.2rem 0 0;
 	font-family: var(--font-display);
-	font-size: 0.96rem;
+	font-size: 1rem;
 	font-weight: 700;
 	line-height: 1.25;
 	letter-spacing: -0.02em;
@@ -1321,7 +1321,7 @@ kbd {
 	border-radius: var(--radius-sm);
 	background: var(--panel-emphasis);
 	font-family: var(--font-mono);
-	font-size: 0.66rem;
+	font-size: 0.75rem;
 	font-weight: 600;
 	color: var(--text-primary);
 }
@@ -1438,7 +1438,7 @@ kbd {
 	}
 
 	.brand-subtitle {
-		font-size: 0.64rem;
+		font-size: 0.75rem;
 	}
 
 	.sidebar-nav button {
@@ -1619,7 +1619,7 @@ kbd {
 	}
 
 	.history-row-time {
-		font-size: 0.66rem;
+		font-size: 0.75rem;
 	}
 
 	.transcript-sheet {
