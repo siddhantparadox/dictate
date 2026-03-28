@@ -1,9 +1,11 @@
 import { Electroview } from "electrobun/view";
 import type {
+	AssemblyAIModelId,
 	DeepgramModelId,
 	GroqModelId,
 	LocalModelId,
 	ModelId,
+	OpenRouterModelId,
 } from "@/shared/models";
 import type {
 	AppSnapshot,
@@ -101,6 +103,12 @@ export const rpcClient = {
 	configureDeepgramProvider: (apiKey: string, modelId: DeepgramModelId) =>
 		rpcProxy.request.configureDeepgramProvider({ apiKey, modelId }),
 	removeDeepgramProvider: () => rpcProxy.request.removeDeepgramProvider({}),
+	configureAssemblyAIProvider: (apiKey: string, modelId: AssemblyAIModelId) =>
+		rpcProxy.request.configureAssemblyAIProvider({ apiKey, modelId }),
+	removeAssemblyAIProvider: () => rpcProxy.request.removeAssemblyAIProvider({}),
+	configureOpenRouterProvider: (apiKey: string, modelId: OpenRouterModelId) =>
+		rpcProxy.request.configureOpenRouterProvider({ apiKey, modelId }),
+	removeOpenRouterProvider: () => rpcProxy.request.removeOpenRouterProvider({}),
 	runMicrophoneTranscription: (
 		durationSeconds?: number,
 	): Promise<TranscriptionResult> =>

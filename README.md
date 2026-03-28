@@ -12,7 +12,7 @@ Dictate is a Windows-first desktop app built with:
 - React for the app UI
 - A Python sidecar for speech recognition
 - Local ASR models from Moonshine and NVIDIA
-- Optional cloud transcription through Groq and Deepgram with bring-your-own API key flows
+- Optional cloud transcription through Groq, Deepgram, AssemblyAI, and OpenRouter with bring-your-own API key flows
 
 The app is designed around one primary interaction:
 
@@ -25,7 +25,7 @@ The app is designed around one primary interaction:
 ## Current Scope
 
 - Local, on-device transcription
-- Optional Groq and Deepgram cloud transcription with saved local API key configuration
+- Optional Groq, Deepgram, AssemblyAI, and OpenRouter cloud transcription with saved local API key configuration
 - Global hotkey: `Ctrl+Shift`
 - Live pill overlay while recording
 - Model download, warm-up, selection, and deletion
@@ -42,7 +42,7 @@ The app is designed around one primary interaction:
 2. Go to `Models`.
 3. Choose `Local` or `Cloud`.
 4. For `Local`, download the model you want to use.
-5. For `Cloud`, connect Groq or Deepgram with your API key and select a cloud model.
+5. For `Cloud`, connect Groq, Deepgram, AssemblyAI, or OpenRouter with your API key and select a cloud model.
 6. Keep `ASR Acceleration` on `Auto` unless you specifically want to force `CPU` or `CUDA`.
 7. Select the model you want as default.
 
@@ -57,6 +57,18 @@ Deepgram setup:
 - Deepgram docs home: [Deepgram Docs](https://developers.deepgram.com/home)
 - New Deepgram accounts currently include `$200` of free credit: [Deepgram Pricing](https://deepgram.com/pricing)
 
+AssemblyAI setup:
+
+- Create a key in [AssemblyAI Dashboard](https://www.assemblyai.com/dashboard)
+- AssemblyAI docs home: [AssemblyAI Docs](https://www.assemblyai.com/docs)
+- AssemblyAI trial accounts currently include `$50` in free credits: [AssemblyAI Support](https://support.assemblyai.com/articles/5370767329-can-i-sign-up-for-free)
+
+OpenRouter setup:
+
+- Create a key in [OpenRouter Keys](https://openrouter.ai/settings/keys)
+- OpenRouter docs home: [OpenRouter Docs](https://openrouter.ai/docs/overview)
+- Dictate currently exposes one fixed OpenRouter speech model: `google/gemini-3.1-flash-lite-preview:nitro`
+
 ### Dictation Flow
 
 1. Put the cursor in a text field.
@@ -69,7 +81,7 @@ Deepgram setup:
 
 - `Overview`: current model, runtime state, latest transcript, warnings, and readiness
 - `History`: recent transcription jobs and outcomes
-- `Models`: local vs cloud model source, install state, Groq and Deepgram connection state, and select/delete actions
+- `Models`: local vs cloud model source, install state, Groq, Deepgram, AssemblyAI, and OpenRouter connection state, and select/delete actions
 - `Settings`: acceleration mode, appearance, paste behavior, and debug flags
 
 ## Models
@@ -93,6 +105,9 @@ Cloud transcription is optional and uses your own provider API key.
 | `Groq` | `whisper-large-v3` | Higher accuracy option with translation support |
 | `Deepgram` | `nova-3` | Recommended Deepgram default for prerecorded BYOK dictation |
 | `Deepgram` | `nova-2` | Deepgram compatibility fallback |
+| `AssemblyAI` | `universal-3-pro` | Recommended AssemblyAI default for BYOK dictation with automatic `universal-2` fallback |
+| `AssemblyAI` | `universal-2` | Standalone AssemblyAI fallback for broad language coverage |
+| `OpenRouter` | `google/gemini-3.1-flash-lite-preview:nitro` | Fixed Gemini audio-input path through OpenRouter's Nitro routing |
 
 ## Runtime Modes
 
@@ -180,7 +195,7 @@ You can override the root with:
 DICTATE_HOME
 ```
 
-App settings and transcription history are stored in the app user data directory in a local SQLite database. Groq and Deepgram BYO-key configuration is stored separately under `.dictateapp\providers.json`.
+App settings and transcription history are stored in the app user data directory in a local SQLite database. Groq, Deepgram, AssemblyAI, and OpenRouter BYO-key configuration is stored separately under `.dictateapp\providers.json`.
 
 ## Repository Layout
 

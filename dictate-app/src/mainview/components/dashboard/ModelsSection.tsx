@@ -3,11 +3,15 @@ import { type Dispatch, type SetStateAction, useState } from "react";
 import { Input } from "@/components/ui/input";
 import type { UseDictateRuntimeResult } from "@/mainview/state/useDictateRuntime";
 import {
+	ASSEMBLYAI_MODEL_OPTIONS,
+	type AssemblyAIModelId,
 	type CloudModelId,
 	type CloudProviderId,
 	DEEPGRAM_MODEL_OPTIONS,
+	DEFAULT_ASSEMBLYAI_MODEL_ID,
 	DEFAULT_DEEPGRAM_MODEL_ID,
 	DEFAULT_GROQ_MODEL_ID,
+	DEFAULT_OPENROUTER_MODEL_ID,
 	type DeepgramModelId,
 	GROQ_MODEL_OPTIONS,
 	type GroqModelId,
@@ -17,6 +21,8 @@ import {
 	getModelProviderLabel,
 	isCloudModelId,
 	type LocalModelId,
+	OPENROUTER_MODEL_OPTIONS,
+	type OpenRouterModelId,
 } from "@/shared/models";
 import type { AppSnapshot } from "@/shared/rpc";
 import {
@@ -43,6 +49,10 @@ interface ModelsSectionProps {
 		| "isRemovingGroq"
 		| "isConfiguringDeepgram"
 		| "isRemovingDeepgram"
+		| "isConfiguringAssemblyAI"
+		| "isRemovingAssemblyAI"
+		| "isConfiguringOpenRouter"
+		| "isRemovingOpenRouter"
 		| "downloadModel"
 		| "selectModel"
 		| "deleteModel"
@@ -50,6 +60,10 @@ interface ModelsSectionProps {
 		| "removeGroqProvider"
 		| "configureDeepgramProvider"
 		| "removeDeepgramProvider"
+		| "configureAssemblyAIProvider"
+		| "removeAssemblyAIProvider"
+		| "configureOpenRouterProvider"
+		| "removeOpenRouterProvider"
 	>;
 	snapshot: AppSnapshot;
 	settings: AppSnapshot["settings"];
@@ -256,6 +270,8 @@ export function ModelsSection({
 }: ModelsSectionProps) {
 	const groq = snapshot.cloudProviders.groq;
 	const deepgram = snapshot.cloudProviders.deepgram;
+	const assemblyai = snapshot.cloudProviders.assemblyai;
+	const openrouter = snapshot.cloudProviders.openrouter;
 	const [activeSource, setActiveSource] = useState<"local" | "cloud">(() =>
 		isCloudModelId(settings.defaultModelId) ? "cloud" : "local",
 	);
@@ -267,11 +283,17 @@ export function ModelsSection({
 			if (defaultProvider) {
 				return defaultProvider;
 			}
-			if (groq.configured && !deepgram.configured) {
+			if (groq.configured) {
 				return "groq";
 			}
-			if (deepgram.configured && !groq.configured) {
+			if (deepgram.configured) {
 				return "deepgram";
+			}
+			if (assemblyai.configured) {
+				return "assemblyai";
+			}
+			if (openrouter.configured) {
+				return "openrouter";
 			}
 			return "groq";
 		});
@@ -290,6 +312,22 @@ export function ModelsSection({
 		);
 	const [showDeepgramEditor, setShowDeepgramEditor] = useState(false);
 	const [deepgramError, setDeepgramError] = useState<string | null>(null);
+
+	const [assemblyaiApiKey, setAssemblyAIApiKey] = useState("");
+	const [pendingAssemblyAIModelId, setPendingAssemblyAIModelId] =
+		useState<AssemblyAIModelId>(
+			assemblyai.selectedModelId ?? DEFAULT_ASSEMBLYAI_MODEL_ID,
+		);
+	const [showAssemblyAIEditor, setShowAssemblyAIEditor] = useState(false);
+	const [assemblyaiError, setAssemblyAIError] = useState<string | null>(null);
+
+	const [openRouterApiKey, setOpenRouterApiKey] = useState("");
+	const [pendingOpenRouterModelId, setPendingOpenRouterModelId] =
+		useState<OpenRouterModelId>(
+			openrouter.selectedModelId ?? DEFAULT_OPENROUTER_MODEL_ID,
+		);
+	const [showOpenRouterEditor, setShowOpenRouterEditor] = useState(false);
+	const [openRouterError, setOpenRouterError] = useState<string | null>(null);
 
 	const handleSaveGroq = async () => {
 		setGroqError(null);
@@ -311,7 +349,15 @@ export function ModelsSection({
 			setGroqApiKey("");
 			setPendingGroqModelId(DEFAULT_GROQ_MODEL_ID);
 			setShowGroqEditor(false);
-			setActiveCloudProvider(deepgram.configured ? "deepgram" : "groq");
+			setActiveCloudProvider(
+				deepgram.configured
+					? "deepgram"
+					: assemblyai.configured
+						? "assemblyai"
+						: openrouter.configured
+							? "openrouter"
+							: "groq",
+			);
 		} catch (error) {
 			setGroqError(formatError(error));
 		}
@@ -340,20 +386,209 @@ export function ModelsSection({
 			setDeepgramApiKey("");
 			setPendingDeepgramModelId(DEFAULT_DEEPGRAM_MODEL_ID);
 			setShowDeepgramEditor(false);
-			setActiveCloudProvider(groq.configured ? "groq" : "deepgram");
+			setActiveCloudProvider(
+				groq.configured
+					? "groq"
+					: assemblyai.configured
+						? "assemblyai"
+						: openrouter.configured
+							? "openrouter"
+							: "deepgram",
+			);
 		} catch (error) {
 			setDeepgramError(formatError(error));
 		}
 	};
 
-	const connectedProviders = [groq.configured, deepgram.configured].filter(
-		Boolean,
-	).length;
+	const handleSaveAssemblyAI = async () => {
+		setAssemblyAIError(null);
+		try {
+			setActiveCloudProvider("assemblyai");
+			await runtime.configureAssemblyAIProvider(
+				assemblyaiApiKey,
+				pendingAssemblyAIModelId,
+			);
+			setAssemblyAIApiKey("");
+			setShowAssemblyAIEditor(false);
+			setActiveSource("cloud");
+		} catch (error) {
+			setAssemblyAIError(formatError(error));
+		}
+	};
+
+	const handleRemoveAssemblyAI = async () => {
+		setAssemblyAIError(null);
+		try {
+			await runtime.removeAssemblyAIProvider();
+			setAssemblyAIApiKey("");
+			setPendingAssemblyAIModelId(DEFAULT_ASSEMBLYAI_MODEL_ID);
+			setShowAssemblyAIEditor(false);
+			setActiveCloudProvider(
+				groq.configured
+					? "groq"
+					: deepgram.configured
+						? "deepgram"
+						: openrouter.configured
+							? "openrouter"
+							: "assemblyai",
+			);
+		} catch (error) {
+			setAssemblyAIError(formatError(error));
+		}
+	};
+
+	const handleSaveOpenRouter = async () => {
+		setOpenRouterError(null);
+		try {
+			setActiveCloudProvider("openrouter");
+			await runtime.configureOpenRouterProvider(
+				openRouterApiKey,
+				pendingOpenRouterModelId,
+			);
+			setOpenRouterApiKey("");
+			setShowOpenRouterEditor(false);
+			setActiveSource("cloud");
+		} catch (error) {
+			setOpenRouterError(formatError(error));
+		}
+	};
+
+	const handleRemoveOpenRouter = async () => {
+		setOpenRouterError(null);
+		try {
+			await runtime.removeOpenRouterProvider();
+			setOpenRouterApiKey("");
+			setPendingOpenRouterModelId(DEFAULT_OPENROUTER_MODEL_ID);
+			setShowOpenRouterEditor(false);
+			setActiveCloudProvider(
+				groq.configured
+					? "groq"
+					: deepgram.configured
+						? "deepgram"
+						: assemblyai.configured
+							? "assemblyai"
+							: "openrouter",
+			);
+		} catch (error) {
+			setOpenRouterError(formatError(error));
+		}
+	};
+
+	const connectedProviders = [
+		groq.configured,
+		deepgram.configured,
+		assemblyai.configured,
+		openrouter.configured,
+	].filter(Boolean).length;
 	const visibleCloudModels =
 		activeCloudProvider === "groq"
 			? GROQ_MODEL_OPTIONS
-			: DEEPGRAM_MODEL_OPTIONS;
+			: activeCloudProvider === "deepgram"
+				? DEEPGRAM_MODEL_OPTIONS
+				: activeCloudProvider === "assemblyai"
+					? ASSEMBLYAI_MODEL_OPTIONS
+					: OPENROUTER_MODEL_OPTIONS;
 	const activeCloudProviderLabel = getCloudProviderLabel(activeCloudProvider);
+	const getProviderConfigured = (providerId: CloudProviderId): boolean => {
+		switch (providerId) {
+			case "assemblyai":
+				return assemblyai.configured;
+			case "deepgram":
+				return deepgram.configured;
+			case "groq":
+				return groq.configured;
+			case "openrouter":
+				return openrouter.configured;
+		}
+	};
+	const getProviderBusy = (providerId: CloudProviderId): boolean => {
+		switch (providerId) {
+			case "assemblyai":
+				return runtime.isConfiguringAssemblyAI || runtime.isRemovingAssemblyAI;
+			case "deepgram":
+				return runtime.isConfiguringDeepgram || runtime.isRemovingDeepgram;
+			case "groq":
+				return runtime.isConfiguringGroq || runtime.isRemovingGroq;
+			case "openrouter":
+				return runtime.isConfiguringOpenRouter || runtime.isRemovingOpenRouter;
+		}
+	};
+	const isSelectedInProviderSetup = (modelId: CloudModelId): boolean => {
+		if (modelId === pendingGroqModelId) {
+			return true;
+		}
+		if (modelId === pendingDeepgramModelId) {
+			return true;
+		}
+		if (modelId === pendingAssemblyAIModelId) {
+			return true;
+		}
+		return modelId === pendingOpenRouterModelId;
+	};
+	const openProviderEditorForModel = (
+		model: (typeof visibleCloudModels)[number],
+	) => {
+		setActiveCloudProvider(model.provider);
+		if (model.provider === "groq") {
+			setGroqError(null);
+			setPendingGroqModelId(model.id as GroqModelId);
+			setShowGroqEditor(true);
+			return;
+		}
+		if (model.provider === "deepgram") {
+			setDeepgramError(null);
+			setPendingDeepgramModelId(model.id as DeepgramModelId);
+			setShowDeepgramEditor(true);
+			return;
+		}
+		if (model.provider === "assemblyai") {
+			setAssemblyAIError(null);
+			setPendingAssemblyAIModelId(model.id as AssemblyAIModelId);
+			setShowAssemblyAIEditor(true);
+			return;
+		}
+		setOpenRouterError(null);
+		setPendingOpenRouterModelId(model.id as OpenRouterModelId);
+		setShowOpenRouterEditor(true);
+	};
+	const handleDeleteModel = (modelId: LocalModelId) => {
+		void runtime.deleteModel(modelId).finally(() => {
+			setConfirmDeleteModelId(null);
+		});
+	};
+	const handleActivateCloudModel = (
+		model: (typeof visibleCloudModels)[number],
+		providerConfigured: boolean,
+	) => {
+		setActiveCloudProvider(model.provider);
+		if (!providerConfigured) {
+			openProviderEditorForModel(model);
+			return;
+		}
+
+		void runtime.selectModel(model.id).catch((error) => {
+			setProviderSelectionError(model.provider, error);
+		});
+	};
+	const setProviderSelectionError = (
+		providerId: CloudProviderId,
+		error: unknown,
+	) => {
+		const message = formatError(error);
+		if (providerId === "groq") {
+			setGroqError(message);
+			return;
+		}
+		if (providerId === "deepgram") {
+			setDeepgramError(message);
+			return;
+		}
+		if (providerId === "assemblyai") {
+			setAssemblyAIError(message);
+			return;
+		}
+		setOpenRouterError(message);
+	};
 
 	return (
 		<div className="content-stack models-screen">
@@ -364,7 +599,7 @@ export function ModelsSection({
 						<span className="section-count">
 							{activeSource === "local"
 								? `${runtime.models.length} local`
-								: `${connectedProviders}/2 connected`}
+								: `${connectedProviders}/4 connected`}
 						</span>
 					</div>
 					<p className="section-copy compact">
@@ -607,10 +842,7 @@ export function ModelsSection({
 														type="button"
 														className="quiet-button destructive"
 														disabled={isDeleting}
-														onClick={() => {
-															setConfirmDeleteModelId(null);
-															void runtime.deleteModel(model.id);
-														}}
+														onClick={() => handleDeleteModel(model.id)}
 													>
 														Confirm delete
 													</button>
@@ -691,6 +923,64 @@ export function ModelsSection({
 							onSave={handleSaveDeepgram}
 							onRemove={handleRemoveDeepgram}
 						/>
+
+						<ProviderSetupCard
+							providerLabel="AssemblyAI"
+							copy="Bring your own AssemblyAI API key to use Universal cloud transcription with the same hold-to-talk dictation flow."
+							configured={assemblyai.configured}
+							maskedApiKey={assemblyai.maskedApiKey}
+							selectedModelId={assemblyai.selectedModelId}
+							lastVerifiedAt={assemblyai.lastVerifiedAt}
+							modelOptions={ASSEMBLYAI_MODEL_OPTIONS.map((model) => ({
+								id: model.id,
+								label: model.label,
+								recommended: model.recommended,
+							}))}
+							apiKey={assemblyaiApiKey}
+							setApiKey={setAssemblyAIApiKey}
+							pendingModelId={pendingAssemblyAIModelId}
+							setPendingModelId={setPendingAssemblyAIModelId}
+							showEditor={showAssemblyAIEditor}
+							setShowEditor={setShowAssemblyAIEditor}
+							error={assemblyaiError}
+							setError={setAssemblyAIError}
+							isSaving={runtime.isConfiguringAssemblyAI}
+							isRemoving={runtime.isRemovingAssemblyAI}
+							saveLabel="Save AssemblyAI"
+							removeLabel="Remove AssemblyAI"
+							onSelect={() => setActiveCloudProvider("assemblyai")}
+							onSave={handleSaveAssemblyAI}
+							onRemove={handleRemoveAssemblyAI}
+						/>
+
+						<ProviderSetupCard
+							providerLabel="OpenRouter"
+							copy="Bring your own OpenRouter API key to use Gemini audio transcription through the Nitro route."
+							configured={openrouter.configured}
+							maskedApiKey={openrouter.maskedApiKey}
+							selectedModelId={openrouter.selectedModelId}
+							lastVerifiedAt={openrouter.lastVerifiedAt}
+							modelOptions={OPENROUTER_MODEL_OPTIONS.map((model) => ({
+								id: model.id,
+								label: model.label,
+								recommended: model.recommended,
+							}))}
+							apiKey={openRouterApiKey}
+							setApiKey={setOpenRouterApiKey}
+							pendingModelId={pendingOpenRouterModelId}
+							setPendingModelId={setPendingOpenRouterModelId}
+							showEditor={showOpenRouterEditor}
+							setShowEditor={setShowOpenRouterEditor}
+							error={openRouterError}
+							setError={setOpenRouterError}
+							isSaving={runtime.isConfiguringOpenRouter}
+							isRemoving={runtime.isRemovingOpenRouter}
+							saveLabel="Save OpenRouter"
+							removeLabel="Remove OpenRouter"
+							onSelect={() => setActiveCloudProvider("openrouter")}
+							onSave={handleSaveOpenRouter}
+							onRemove={handleRemoveOpenRouter}
+						/>
 					</div>
 
 					<div className="cloud-provider-toolbar">
@@ -719,6 +1009,24 @@ export function ModelsSection({
 							>
 								Deepgram
 							</button>
+							<button
+								type="button"
+								className={
+									activeCloudProvider === "assemblyai" ? "active" : undefined
+								}
+								onClick={() => setActiveCloudProvider("assemblyai")}
+							>
+								AssemblyAI
+							</button>
+							<button
+								type="button"
+								className={
+									activeCloudProvider === "openrouter" ? "active" : undefined
+								}
+								onClick={() => setActiveCloudProvider("openrouter")}
+							>
+								OpenRouter
+							</button>
 						</div>
 					</div>
 
@@ -727,7 +1035,9 @@ export function ModelsSection({
 						<p className="cloud-provider-note-copy">
 							Audio is sent to the active cloud provider when a cloud model is
 							selected. Groq uses Whisper transcription. Deepgram uses Nova
-							pre-recorded transcription with language detection.
+							pre-recorded transcription with language detection. AssemblyAI
+							uses async Universal pre-recorded transcription. OpenRouter uses
+							Gemini audio input over chat completions.
 						</p>
 					</div>
 
@@ -743,19 +1053,10 @@ export function ModelsSection({
 					<div className="cloud-model-grid">
 						{visibleCloudModels.map((model) => {
 							const providerLabel = getCloudProviderLabel(model.provider);
-							const providerConfigured =
-								model.provider === "groq"
-									? groq.configured
-									: deepgram.configured;
-							const providerBusy =
-								model.provider === "groq"
-									? runtime.isConfiguringGroq || runtime.isRemovingGroq
-									: runtime.isConfiguringDeepgram || runtime.isRemovingDeepgram;
+							const providerConfigured = getProviderConfigured(model.provider);
+							const providerBusy = getProviderBusy(model.provider);
 							const isActive = settings.defaultModelId === model.id;
-							const isSelectedInSetup =
-								model.provider === "groq"
-									? pendingGroqModelId === model.id
-									: pendingDeepgramModelId === model.id;
+							const isSelectedInSetup = isSelectedInProviderSetup(model.id);
 							const canActivate =
 								providerConfigured &&
 								!providerBusy &&
@@ -805,29 +1106,9 @@ export function ModelsSection({
 											disabled={
 												providerConfigured ? !canActivate || isActive : false
 											}
-											onClick={() => {
-												setActiveCloudProvider(model.provider);
-												if (!providerConfigured) {
-													if (model.provider === "groq") {
-														setGroqError(null);
-														setPendingGroqModelId(model.id);
-														setShowGroqEditor(true);
-													} else {
-														setDeepgramError(null);
-														setPendingDeepgramModelId(model.id);
-														setShowDeepgramEditor(true);
-													}
-													return;
-												}
-
-												void runtime.selectModel(model.id).catch((error) => {
-													if (model.provider === "groq") {
-														setGroqError(formatError(error));
-													} else {
-														setDeepgramError(formatError(error));
-													}
-												});
-											}}
+											onClick={() =>
+												handleActivateCloudModel(model, providerConfigured)
+											}
 										>
 											{providerConfigured
 												? runtime.isSelectingModelId === model.id

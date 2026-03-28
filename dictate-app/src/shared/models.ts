@@ -6,10 +6,16 @@ export type LocalModelId =
 
 export type GroqModelId = "whisper-large-v3" | "whisper-large-v3-turbo";
 export type DeepgramModelId = "nova-3" | "nova-2";
-export type CloudModelId = GroqModelId | DeepgramModelId;
+export type AssemblyAIModelId = "universal-3-pro" | "universal-2";
+export type OpenRouterModelId = "google/gemini-3.1-flash-lite-preview:nitro";
+export type CloudModelId =
+	| GroqModelId
+	| DeepgramModelId
+	| AssemblyAIModelId
+	| OpenRouterModelId;
 export type ModelId = LocalModelId | CloudModelId;
 export type ModelSource = "local" | "cloud";
-export type CloudProviderId = "groq" | "deepgram";
+export type CloudProviderId = "groq" | "deepgram" | "assemblyai" | "openrouter";
 
 export type CompatibilityTier =
 	| "recommended"
@@ -73,7 +79,19 @@ export type DeepgramModelOption = BaseCloudModelOption<
 	DeepgramModelId,
 	"deepgram"
 >;
-export type CloudModelOption = GroqModelOption | DeepgramModelOption;
+export type AssemblyAIModelOption = BaseCloudModelOption<
+	AssemblyAIModelId,
+	"assemblyai"
+>;
+export type OpenRouterModelOption = BaseCloudModelOption<
+	OpenRouterModelId,
+	"openrouter"
+>;
+export type CloudModelOption =
+	| GroqModelOption
+	| DeepgramModelOption
+	| AssemblyAIModelOption
+	| OpenRouterModelOption;
 
 export const MODEL_CATALOG: LocalModelCatalogItem[] = [
 	{
@@ -212,15 +230,62 @@ export const DEEPGRAM_MODEL_OPTIONS: DeepgramModelOption[] = [
 	},
 ];
 
+export const ASSEMBLYAI_MODEL_OPTIONS: AssemblyAIModelOption[] = [
+	{
+		id: "universal-3-pro",
+		source: "cloud",
+		provider: "assemblyai",
+		label: "AssemblyAI Universal-3 Pro",
+		notes:
+			"Best AssemblyAI accuracy for dictation. Dictate pairs it with Universal-2 automatically for broader language coverage.",
+		languageLabel: "Adaptive",
+		highlightLabel: "$0.21 / audio hour",
+		metaTags: ["Async job", "Fallback enabled"],
+		recommended: true,
+	},
+	{
+		id: "universal-2",
+		source: "cloud",
+		provider: "assemblyai",
+		label: "AssemblyAI Universal-2",
+		notes:
+			"Standalone fallback with broad language coverage when you want AssemblyAI without the Universal-3 Pro path.",
+		languageLabel: "99 languages",
+		highlightLabel: "$0.15 / audio hour",
+		metaTags: ["Async job", "Standalone"],
+		recommended: false,
+	},
+];
+
+export const OPENROUTER_MODEL_OPTIONS: OpenRouterModelOption[] = [
+	{
+		id: "google/gemini-3.1-flash-lite-preview:nitro",
+		source: "cloud",
+		provider: "openrouter",
+		label: "OpenRouter Gemini 3.1 Flash Lite Nitro",
+		notes:
+			"Gemini audio transcription through OpenRouter with the Nitro high-throughput route.",
+		languageLabel: "Multilingual",
+		highlightLabel: "$0.50 / M audio tokens",
+		metaTags: ["Nitro", "Gemini", "Audio input"],
+		recommended: true,
+	},
+];
+
 export const CLOUD_MODEL_OPTIONS: CloudModelOption[] = [
 	...GROQ_MODEL_OPTIONS,
 	...DEEPGRAM_MODEL_OPTIONS,
+	...ASSEMBLYAI_MODEL_OPTIONS,
+	...OPENROUTER_MODEL_OPTIONS,
 ];
 
 export const DEFAULT_MODEL_ID: LocalModelId =
 	"UsefulSensors/moonshine-streaming-medium";
 export const DEFAULT_GROQ_MODEL_ID: GroqModelId = "whisper-large-v3-turbo";
 export const DEFAULT_DEEPGRAM_MODEL_ID: DeepgramModelId = "nova-3";
+export const DEFAULT_ASSEMBLYAI_MODEL_ID: AssemblyAIModelId = "universal-3-pro";
+export const DEFAULT_OPENROUTER_MODEL_ID: OpenRouterModelId =
+	"google/gemini-3.1-flash-lite-preview:nitro";
 
 export function isLocalModelId(value: string): value is LocalModelId {
 	return MODEL_CATALOG.some((model) => model.id === value);
@@ -232,6 +297,14 @@ export function isGroqModelId(value: string): value is GroqModelId {
 
 export function isDeepgramModelId(value: string): value is DeepgramModelId {
 	return DEEPGRAM_MODEL_OPTIONS.some((model) => model.id === value);
+}
+
+export function isAssemblyAIModelId(value: string): value is AssemblyAIModelId {
+	return ASSEMBLYAI_MODEL_OPTIONS.some((model) => model.id === value);
+}
+
+export function isOpenRouterModelId(value: string): value is OpenRouterModelId {
+	return OPENROUTER_MODEL_OPTIONS.some((model) => model.id === value);
 }
 
 export function isCloudModelId(value: string): value is CloudModelId {
@@ -250,6 +323,18 @@ export function getDeepgramModelOption(
 	return DEEPGRAM_MODEL_OPTIONS.find((model) => model.id === modelId) ?? null;
 }
 
+export function getAssemblyAIModelOption(
+	modelId: AssemblyAIModelId,
+): AssemblyAIModelOption | null {
+	return ASSEMBLYAI_MODEL_OPTIONS.find((model) => model.id === modelId) ?? null;
+}
+
+export function getOpenRouterModelOption(
+	modelId: OpenRouterModelId,
+): OpenRouterModelOption | null {
+	return OPENROUTER_MODEL_OPTIONS.find((model) => model.id === modelId) ?? null;
+}
+
 export function getCloudModelOption(
 	modelId: CloudModelId,
 ): CloudModelOption | null {
@@ -258,6 +343,12 @@ export function getCloudModelOption(
 	}
 	if (isDeepgramModelId(modelId)) {
 		return getDeepgramModelOption(modelId);
+	}
+	if (isAssemblyAIModelId(modelId)) {
+		return getAssemblyAIModelOption(modelId);
+	}
+	if (isOpenRouterModelId(modelId)) {
+		return getOpenRouterModelOption(modelId);
 	}
 	return null;
 }
@@ -275,15 +366,25 @@ export function getCloudProviderIdForModel(
 	if (isDeepgramModelId(modelId)) {
 		return "deepgram";
 	}
+	if (isAssemblyAIModelId(modelId)) {
+		return "assemblyai";
+	}
+	if (isOpenRouterModelId(modelId)) {
+		return "openrouter";
+	}
 	return null;
 }
 
 export function getCloudProviderLabel(providerId: CloudProviderId): string {
 	switch (providerId) {
+		case "assemblyai":
+			return "AssemblyAI";
 		case "deepgram":
 			return "Deepgram";
-		default:
+		case "groq":
 			return "Groq";
+		case "openrouter":
+			return "OpenRouter";
 	}
 }
 

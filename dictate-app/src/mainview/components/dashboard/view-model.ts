@@ -341,10 +341,14 @@ function isCloudModelConfigured(
 	model: CloudModelOption,
 ): boolean {
 	switch (model.provider) {
+		case "assemblyai":
+			return snapshot.cloudProviders.assemblyai.configured;
 		case "deepgram":
 			return snapshot.cloudProviders.deepgram.configured;
-		default:
+		case "groq":
 			return snapshot.cloudProviders.groq.configured;
+		case "openrouter":
+			return snapshot.cloudProviders.openrouter.configured;
 	}
 }
 
@@ -589,6 +593,30 @@ export function buildOverviewMessages(args: {
 			if (args.selectedCloudModel.id === "nova-2") {
 				tips.push(
 					"Nova-2 is a compatibility fallback when you want Deepgram beyond the Nova-3 default path.",
+				);
+			}
+			if (args.selectedCloudModel.id === "universal-3-pro") {
+				tips.push(
+					"Universal-3 Pro is AssemblyAI's best pre-recorded dictation option, and Dictate automatically falls back to Universal-2 for broader language coverage.",
+				);
+				tips.push(
+					"AssemblyAI runs through an async upload-and-poll flow, so first-result latency can feel a bit slower than Groq or Deepgram.",
+				);
+			}
+			if (args.selectedCloudModel.id === "universal-2") {
+				tips.push(
+					"Universal-2 is the simpler standalone AssemblyAI fallback when you want broad language coverage without the Universal-3 Pro path.",
+				);
+			}
+			if (
+				args.selectedCloudModel.id ===
+				"google/gemini-3.1-flash-lite-preview:nitro"
+			) {
+				tips.push(
+					"OpenRouter uses Gemini audio input through the Nitro routing variant, so Dictate sends your recorded WAV clip as inline audio to a chat completion request.",
+				);
+				tips.push(
+					"OpenRouter transcription quality depends on the Gemini audio-capable model path, not a dedicated speech endpoint.",
 				);
 			}
 		}

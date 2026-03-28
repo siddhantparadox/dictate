@@ -1,4 +1,5 @@
 import type {
+	AssemblyAIModelId,
 	CudaGraphsStatus,
 	DeepgramModelId,
 	GroqModelId,
@@ -6,6 +7,7 @@ import type {
 	LocalModelCatalogItem,
 	LocalModelId,
 	ModelId,
+	OpenRouterModelId,
 } from "./models";
 
 type NoParams = Record<string, never>;
@@ -90,6 +92,20 @@ export interface DeepgramProviderSnapshot {
 	lastVerifiedAt: string | null;
 }
 
+export interface AssemblyAIProviderSnapshot {
+	configured: boolean;
+	maskedApiKey: string | null;
+	selectedModelId: AssemblyAIModelId | null;
+	lastVerifiedAt: string | null;
+}
+
+export interface OpenRouterProviderSnapshot {
+	configured: boolean;
+	maskedApiKey: string | null;
+	selectedModelId: OpenRouterModelId | null;
+	lastVerifiedAt: string | null;
+}
+
 export interface AppSnapshot {
 	pillState: RecordingPillState;
 	pill: {
@@ -135,6 +151,8 @@ export interface AppSnapshot {
 	cloudProviders: {
 		groq: GroqProviderSnapshot;
 		deepgram: DeepgramProviderSnapshot;
+		assemblyai: AssemblyAIProviderSnapshot;
+		openrouter: OpenRouterProviderSnapshot;
 	};
 	sidecarStatus: "ready" | "starting" | "stopped" | "error";
 	lastJob: JobRecord | null;
@@ -216,6 +234,22 @@ export type DictateRPC = {
 				response: AppSnapshot;
 			};
 			removeDeepgramProvider: {
+				params: NoParams;
+				response: AppSnapshot;
+			};
+			configureAssemblyAIProvider: {
+				params: { apiKey: string; modelId: AssemblyAIModelId };
+				response: AppSnapshot;
+			};
+			removeAssemblyAIProvider: {
+				params: NoParams;
+				response: AppSnapshot;
+			};
+			configureOpenRouterProvider: {
+				params: { apiKey: string; modelId: OpenRouterModelId };
+				response: AppSnapshot;
+			};
+			removeOpenRouterProvider: {
 				params: NoParams;
 				response: AppSnapshot;
 			};

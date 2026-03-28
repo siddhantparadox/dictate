@@ -770,7 +770,7 @@
 
 .cloud-provider-grid {
 	display: grid;
-	grid-template-columns: repeat(2, minmax(0, 1fr));
+	grid-template-columns: repeat(auto-fit, minmax(20rem, 1fr));
 	gap: 1rem;
 }
 
@@ -882,7 +882,7 @@
 
 .cloud-save-model-list {
 	display: grid;
-	grid-template-columns: repeat(2, minmax(0, 1fr));
+	grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
 	gap: 0.5rem;
 }
 
@@ -915,7 +915,7 @@
 
 .cloud-model-grid {
 	display: grid;
-	grid-template-columns: repeat(2, minmax(0, 1fr));
+	grid-template-columns: repeat(auto-fit, minmax(20rem, 1fr));
 	gap: 0.9rem;
 }
 
@@ -950,6 +950,12 @@
 	gap: 0.75rem;
 }
 
+.cloud-model-head > div {
+	min-width: 0;
+	display: grid;
+	gap: 0.35rem;
+}
+
 .cloud-model-meta {
 	display: flex;
 	flex-wrap: wrap;
@@ -958,9 +964,10 @@
 
 .cloud-model-actions {
 	display: flex;
-	align-items: center;
+	align-items: flex-start;
 	justify-content: space-between;
 	gap: 0.75rem;
+	flex-wrap: wrap;
 }
 
 .models-table-head,
@@ -1364,7 +1371,7 @@
 .settings-grid,
 .settings-runtime-grid {
 	display: grid;
-	grid-template-columns: repeat(2, minmax(0, 1fr));
+	grid-template-columns: repeat(auto-fit, minmax(20rem, 1fr));
 	gap: 1rem;
 }
 
@@ -1411,8 +1418,8 @@
 }
 
 .segmented-control.cloud-provider-toggle {
-	max-width: 18rem;
-	grid-template-columns: repeat(2, minmax(0, 1fr));
+	max-width: 38rem;
+	grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
 .runtime-control {
@@ -1511,7 +1518,7 @@
 
 .settings-runtime-metrics {
 	display: grid;
-	grid-template-columns: repeat(2, minmax(0, 1fr));
+	grid-template-columns: repeat(auto-fit, minmax(20rem, 1fr));
 	gap: 0.85rem;
 }
 
@@ -1734,7 +1741,7 @@ kbd {
 	}
 
 	.overview-stat-grid {
-		grid-template-columns: repeat(2, minmax(0, 1fr));
+		grid-template-columns: repeat(auto-fit, minmax(20rem, 1fr));
 	}
 
 	.models-table-head {
@@ -1822,6 +1829,11 @@ kbd {
 
 	.cloud-save-model-list {
 		grid-template-columns: 1fr;
+	}
+
+	.segmented-control.cloud-provider-toggle {
+		max-width: none;
+		grid-template-columns: repeat(2, minmax(0, 1fr));
 	}
 }
 

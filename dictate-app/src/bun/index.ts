@@ -20,6 +20,7 @@ import Electrobun, {
 	Utils,
 } from "electrobun/bun";
 import {
+	type AssemblyAIModelId,
 	DEFAULT_MODEL_ID,
 	type DeepgramModelId,
 	type GroqModelId,
@@ -27,13 +28,16 @@ import {
 	getModelLabel as getKnownModelLabel,
 	getModelProviderLabel,
 	type InferenceEngine,
+	isAssemblyAIModelId,
 	isCloudModelId,
 	isDeepgramModelId,
 	isGroqModelId,
 	isLocalModelId,
+	isOpenRouterModelId,
 	type LocalModelCatalogItem,
 	type LocalModelId,
 	type ModelId,
+	type OpenRouterModelId,
 } from "../shared/models";
 import type {
 	AppSnapshot,
@@ -48,6 +52,10 @@ import type {
 	ToastPayload,
 	TranscriptionResult,
 } from "../shared/rpc";
+import {
+	transcribeWithAssemblyAI,
+	verifyAssemblyAICredentials,
+} from "./assemblyai";
 import { autoPasteText } from "./autopaste";
 import { transcribeWithDeepgram, verifyDeepgramCredentials } from "./deepgram";
 import { transcribeWithGroq, verifyGroqCredentials } from "./groq";
@@ -55,6 +63,10 @@ import {
 	applyHardwareSupportToModels,
 	probeHardwareSnapshot,
 } from "./hardware";
+import {
+	transcribeWithOpenRouter,
+	verifyOpenRouterCredentials,
+} from "./openrouter";
 import { CloudProviderStore } from "./provider-store";
 import { SidecarClient } from "./sidecar";
 import { DictateStorage } from "./storage";
@@ -515,7 +527,11 @@ if (
 	(isGroqModelId(initialSettings.defaultModelId) &&
 		!cloudProviderStore.getGroqSnapshot().configured) ||
 	(isDeepgramModelId(initialSettings.defaultModelId) &&
-		!cloudProviderStore.getDeepgramSnapshot().configured)
+		!cloudProviderStore.getDeepgramSnapshot().configured) ||
+	(isAssemblyAIModelId(initialSettings.defaultModelId) &&
+		!cloudProviderStore.getAssemblyAISnapshot().configured) ||
+	(isOpenRouterModelId(initialSettings.defaultModelId) &&
+		!cloudProviderStore.getOpenRouterSnapshot().configured)
 ) {
 	initialSettings = storage.updateSettings({
 		defaultModelId: DEFAULT_MODEL_ID,
@@ -883,6 +899,34 @@ function getDeepgramConfigOrThrow(): {
 	return config;
 }
 
+function getAssemblyAIConfigOrThrow(): {
+	apiKey: string;
+	selectedModelId: AssemblyAIModelId;
+	lastVerifiedAt: string;
+} {
+	const config = cloudProviderStore.getAssemblyAIConfig();
+	if (!config) {
+		throw new Error(
+			"Connect AssemblyAI in Models before using an AssemblyAI cloud model.",
+		);
+	}
+	return config;
+}
+
+function getOpenRouterConfigOrThrow(): {
+	apiKey: string;
+	selectedModelId: OpenRouterModelId;
+	lastVerifiedAt: string;
+} {
+	const config = cloudProviderStore.getOpenRouterConfig();
+	if (!config) {
+		throw new Error(
+			"Connect OpenRouter in Models before using an OpenRouter cloud model.",
+		);
+	}
+	return config;
+}
+
 function ensureCloudProviderConfig(modelId: ModelId): void {
 	if (isGroqModelId(modelId)) {
 		getGroqConfigOrThrow();
@@ -890,6 +934,14 @@ function ensureCloudProviderConfig(modelId: ModelId): void {
 	}
 	if (isDeepgramModelId(modelId)) {
 		getDeepgramConfigOrThrow();
+		return;
+	}
+	if (isAssemblyAIModelId(modelId)) {
+		getAssemblyAIConfigOrThrow();
+		return;
+	}
+	if (isOpenRouterModelId(modelId)) {
+		getOpenRouterConfigOrThrow();
 	}
 }
 
@@ -929,6 +981,24 @@ async function transcribeCloudAudio(
 		if (isDeepgramModelId(modelId)) {
 			const config = getDeepgramConfigOrThrow();
 			return await transcribeWithDeepgram({
+				apiKey: config.apiKey,
+				modelId,
+				audioFilePath,
+			});
+		}
+
+		if (isAssemblyAIModelId(modelId)) {
+			const config = getAssemblyAIConfigOrThrow();
+			return await transcribeWithAssemblyAI({
+				apiKey: config.apiKey,
+				modelId,
+				audioFilePath,
+			});
+		}
+
+		if (isOpenRouterModelId(modelId)) {
+			const config = getOpenRouterConfigOrThrow();
+			return await transcribeWithOpenRouter({
 				apiKey: config.apiKey,
 				modelId,
 				audioFilePath,
@@ -1076,7 +1146,11 @@ function triggerSelectedModelWarmup(reason: string): void {
 				const providerLabel = getModelProviderLabel(modelId) ?? "Cloud";
 				const providerConfigured = isGroqModelId(modelId)
 					? cloudProviderStore.getGroqSnapshot().configured
-					: cloudProviderStore.getDeepgramSnapshot().configured;
+					: isDeepgramModelId(modelId)
+						? cloudProviderStore.getDeepgramSnapshot().configured
+						: isAssemblyAIModelId(modelId)
+							? cloudProviderStore.getAssemblyAISnapshot().configured
+							: cloudProviderStore.getOpenRouterSnapshot().configured;
 				lastWarmupSignature = null;
 				setWarmupState({
 					state: providerConfigured ? "ready" : "error",
@@ -2038,6 +2112,8 @@ function getSnapshot(): AppSnapshot {
 			cloudProviders: {
 				groq: cloudProviderStore.getGroqSnapshot(),
 				deepgram: cloudProviderStore.getDeepgramSnapshot(),
+				assemblyai: cloudProviderStore.getAssemblyAISnapshot(),
+				openrouter: cloudProviderStore.getOpenRouterSnapshot(),
 			},
 			sidecarStatus: sidecar.getStatus(),
 			lastJob: lastJobCache,
@@ -2880,6 +2956,122 @@ async function removeDeepgramProvider(): Promise<AppSnapshot> {
 	return getSnapshot();
 }
 
+async function configureAssemblyAIProvider(
+	apiKey: string,
+	modelId: AssemblyAIModelId,
+): Promise<AppSnapshot> {
+	if (isTranscriptionActive()) {
+		throw new Error(
+			"Wait for the current transcription to finish before changing AssemblyAI settings.",
+		);
+	}
+
+	const normalizedApiKey = apiKey.trim();
+	const verification = await verifyAssemblyAICredentials({
+		apiKey: normalizedApiKey,
+		modelId,
+	});
+
+	cloudProviderStore.saveAssemblyAIConfig({
+		apiKey: normalizedApiKey,
+		selectedModelId: modelId,
+		lastVerifiedAt: verification.verifiedAt,
+	});
+	storage.updateSettings({ defaultModelId: modelId });
+	lastWarmupSignature = null;
+	triggerSelectedModelWarmup("assemblyai-configure");
+	await sendToast({
+		type: "success",
+		title: "AssemblyAI connected",
+		message: `${getModelLabel(modelId)} is ready to use.`,
+	});
+	await broadcastSnapshot({ target: "main" });
+	return getSnapshot();
+}
+
+async function removeAssemblyAIProvider(): Promise<AppSnapshot> {
+	if (isTranscriptionActive()) {
+		throw new Error(
+			"Wait for the current transcription to finish before removing AssemblyAI.",
+		);
+	}
+
+	cloudProviderStore.removeAssemblyAIConfig();
+	const settings = storage.getSettings();
+	if (isAssemblyAIModelId(settings.defaultModelId)) {
+		storage.updateSettings({
+			defaultModelId: DEFAULT_MODEL_ID,
+		});
+	}
+	lastWarmupSignature = null;
+	triggerSelectedModelWarmup("assemblyai-remove");
+	await sendToast({
+		type: "info",
+		title: "AssemblyAI removed",
+		message: "Saved AssemblyAI API key and cloud model selection were removed.",
+	});
+	await broadcastSnapshot({ target: "main" });
+	return getSnapshot();
+}
+
+async function configureOpenRouterProvider(
+	apiKey: string,
+	modelId: OpenRouterModelId,
+): Promise<AppSnapshot> {
+	if (isTranscriptionActive()) {
+		throw new Error(
+			"Wait for the current transcription to finish before changing OpenRouter settings.",
+		);
+	}
+
+	const normalizedApiKey = apiKey.trim();
+	const verification = await verifyOpenRouterCredentials({
+		apiKey: normalizedApiKey,
+		modelId,
+	});
+
+	cloudProviderStore.saveOpenRouterConfig({
+		apiKey: normalizedApiKey,
+		selectedModelId: modelId,
+		lastVerifiedAt: verification.verifiedAt,
+	});
+	storage.updateSettings({ defaultModelId: modelId });
+	lastWarmupSignature = null;
+	triggerSelectedModelWarmup("openrouter-configure");
+	await sendToast({
+		type: "success",
+		title: "OpenRouter connected",
+		message: `${getModelLabel(modelId)} is ready to use.`,
+	});
+	await broadcastSnapshot({ target: "main" });
+	return getSnapshot();
+}
+
+async function removeOpenRouterProvider(): Promise<AppSnapshot> {
+	if (isTranscriptionActive()) {
+		throw new Error(
+			"Wait for the current transcription to finish before removing OpenRouter.",
+		);
+	}
+
+	cloudProviderStore.removeOpenRouterConfig();
+	const settings = storage.getSettings();
+	if (isOpenRouterModelId(settings.defaultModelId)) {
+		storage.updateSettings({
+			defaultModelId: DEFAULT_MODEL_ID,
+		});
+	}
+	lastWarmupSignature = null;
+	triggerSelectedModelWarmup("openrouter-remove");
+	await sendToast({
+		type: "info",
+		title: "OpenRouter removed",
+		message: "Saved OpenRouter API key and cloud model selection were removed.",
+	});
+	await broadcastSnapshot({ target: "main" });
+	return getSnapshot();
+}
+
 function registerGlobalHotkey(hotkey: string): boolean {
 	GlobalShortcut.unregisterAll();
 	const accelerator = hotkey.trim() || FALLBACK_HOTKEY;
@@ -2981,6 +3173,10 @@ function createWindowRpc(windowName: "main" | "pill") {
 							cloudProviderStore.updateGroqSelectedModel(modelId);
 						} else if (isDeepgramModelId(modelId)) {
 							cloudProviderStore.updateDeepgramSelectedModel(modelId);
+						} else if (isAssemblyAIModelId(modelId)) {
+							cloudProviderStore.updateAssemblyAISelectedModel(modelId);
+						} else if (isOpenRouterModelId(modelId)) {
+							cloudProviderStore.updateOpenRouterSelectedModel(modelId);
 						}
 					}
 					storage.updateSettings({ defaultModelId: modelId });
@@ -2995,6 +3191,12 @@ function createWindowRpc(windowName: "main" | "pill") {
 				configureDeepgramProvider: async ({ apiKey, modelId }) =>
 					configureDeepgramProvider(apiKey, modelId),
 				removeDeepgramProvider: async () => removeDeepgramProvider(),
+				configureAssemblyAIProvider: async ({ apiKey, modelId }) =>
+					configureAssemblyAIProvider(apiKey, modelId),
+				removeAssemblyAIProvider: async () => removeAssemblyAIProvider(),
+				configureOpenRouterProvider: async ({ apiKey, modelId }) =>
+					configureOpenRouterProvider(apiKey, modelId),
+				removeOpenRouterProvider: async () => removeOpenRouterProvider(),
 				runMicrophoneTranscription: async ({ durationSeconds }) =>
 					runMicrophoneTranscription(
 						"settings-window",
@@ -3229,6 +3431,7 @@ async function bootstrap(): Promise<void> {
 		);
 	}
 	trayRef = createTray();
+	ensurePillWindow();
 
 	const settings = storage.getSettings();
 	try {

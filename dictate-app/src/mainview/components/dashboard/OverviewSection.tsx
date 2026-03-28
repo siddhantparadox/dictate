@@ -142,7 +142,7 @@ export function OverviewSection({
 							</p>
 							<p className="overview-stat-detail">
 								{selectedCloudModel
-									? `${selectedModelProviderLabel ?? "Groq"} transcription`
+									? `${selectedModelProviderLabel ?? "Cloud"} transcription`
 									: (selectedModelRuntime?.quantizationLabel ??
 										"Waiting for model")}
 							</p>

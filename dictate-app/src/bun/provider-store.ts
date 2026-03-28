@@ -8,16 +8,24 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import {
+	type AssemblyAIModelId,
+	DEFAULT_ASSEMBLYAI_MODEL_ID,
 	DEFAULT_DEEPGRAM_MODEL_ID,
 	DEFAULT_GROQ_MODEL_ID,
+	DEFAULT_OPENROUTER_MODEL_ID,
 	type DeepgramModelId,
 	type GroqModelId,
+	isAssemblyAIModelId,
 	isDeepgramModelId,
 	isGroqModelId,
+	isOpenRouterModelId,
+	type OpenRouterModelId,
 } from "../shared/models";
 import type {
+	AssemblyAIProviderSnapshot,
 	DeepgramProviderSnapshot,
 	GroqProviderSnapshot,
+	OpenRouterProviderSnapshot,
 } from "../shared/rpc";
 
 interface StoredGroqProviderConfig {
@@ -32,9 +40,23 @@ interface StoredDeepgramProviderConfig {
 	lastVerifiedAt: string;
 }
 
+interface StoredAssemblyAIProviderConfig {
+	apiKey: string;
+	selectedModelId: AssemblyAIModelId;
+	lastVerifiedAt: string;
+}
+
+interface StoredOpenRouterProviderConfig {
+	apiKey: string;
+	selectedModelId: OpenRouterModelId;
+	lastVerifiedAt: string;
+}
+
 interface StoredProviderFile {
 	groq?: Partial<StoredGroqProviderConfig>;
 	deepgram?: Partial<StoredDeepgramProviderConfig>;
+	assemblyai?: Partial<StoredAssemblyAIProviderConfig>;
+	openrouter?: Partial<StoredOpenRouterProviderConfig>;
 }
 
 function maskApiKey(apiKey: string): string {
@@ -94,6 +116,56 @@ function normalizeDeepgramConfig(
 	};
 }
 
+function normalizeAssemblyAIConfig(
+	value: Partial<StoredAssemblyAIProviderConfig> | undefined,
+): StoredAssemblyAIProviderConfig | null {
+	if (!value || typeof value.apiKey !== "string") {
+		return null;
+	}
+
+	const apiKey = value.apiKey.trim();
+	if (apiKey.length === 0) {
+		return null;
+	}
+
+	const selectedModelId = isAssemblyAIModelId(value.selectedModelId ?? "")
+		? value.selectedModelId
+		: DEFAULT_ASSEMBLYAI_MODEL_ID;
+	const lastVerifiedAt =
+		typeof value.lastVerifiedAt === "string" ? value.lastVerifiedAt : "";
+
+	return {
+		apiKey,
+		selectedModelId,
+		lastVerifiedAt,
+	};
+}
+
+function normalizeOpenRouterConfig(
+	value: Partial<StoredOpenRouterProviderConfig> | undefined,
+): StoredOpenRouterProviderConfig | null {
+	if (!value || typeof value.apiKey !== "string") {
+		return null;
+	}
+
+	const apiKey = value.apiKey.trim();
+	if (apiKey.length === 0) {
+		return null;
+	}
+
+	const selectedModelId = isOpenRouterModelId(value.selectedModelId ?? "")
+		? value.selectedModelId
+		: DEFAULT_OPENROUTER_MODEL_ID;
+	const lastVerifiedAt =
+		typeof value.lastVerifiedAt === "string" ? value.lastVerifiedAt : "";
+
+	return {
+		apiKey,
+		selectedModelId,
+		lastVerifiedAt,
+	};
+}
+
 export class CloudProviderStore {
 	private readonly filePath: string;
 
@@ -133,6 +205,14 @@ export class CloudProviderStore {
 		return normalizeDeepgramConfig(this.readFile().deepgram);
 	}
 
+	getAssemblyAIConfig(): StoredAssemblyAIProviderConfig | null {
+		return normalizeAssemblyAIConfig(this.readFile().assemblyai);
+	}
+
+	getOpenRouterConfig(): StoredOpenRouterProviderConfig | null {
+		return normalizeOpenRouterConfig(this.readFile().openrouter);
+	}
+
 	getGroqSnapshot(): GroqProviderSnapshot {
 		const config = this.getGroqConfig();
 		if (!config) {
@@ -154,6 +234,44 @@ export class CloudProviderStore {
 
 	getDeepgramSnapshot(): DeepgramProviderSnapshot {
 		const config = this.getDeepgramConfig();
+		if (!config) {
+			return {
+				configured: false,
+				maskedApiKey: null,
+				selectedModelId: null,
+				lastVerifiedAt: null,
+			};
+		}
+
+		return {
+			configured: true,
+			maskedApiKey: maskApiKey(config.apiKey),
+			selectedModelId: config.selectedModelId,
+			lastVerifiedAt: config.lastVerifiedAt || null,
+		};
+	}
+
+	getAssemblyAISnapshot(): AssemblyAIProviderSnapshot {
+		const config = this.getAssemblyAIConfig();
+		if (!config) {
+			return {
+				configured: false,
+				maskedApiKey: null,
+				selectedModelId: null,
+				lastVerifiedAt: null,
+			};
+		}
+
+		return {
+			configured: true,
+			maskedApiKey: maskApiKey(config.apiKey),
+			selectedModelId: config.selectedModelId,
+			lastVerifiedAt: config.lastVerifiedAt || null,
+		};
+	}
+
+	getOpenRouterSnapshot(): OpenRouterProviderSnapshot {
+		const config = this.getOpenRouterConfig();
 		if (!config) {
 			return {
 				configured: false,
@@ -195,6 +313,30 @@ export class CloudProviderStore {
 		});
 	}
 
+	saveAssemblyAIConfig(next: StoredAssemblyAIProviderConfig): void {
+		const current = this.readFile();
+		this.writeFile({
+			...current,
+			assemblyai: {
+				apiKey: next.apiKey.trim(),
+				selectedModelId: next.selectedModelId,
+				lastVerifiedAt: next.lastVerifiedAt,
+			},
+		});
+	}
+
+	saveOpenRouterConfig(next: StoredOpenRouterProviderConfig): void {
+		const current = this.readFile();
+		this.writeFile({
+			...current,
+			openrouter: {
+				apiKey: next.apiKey.trim(),
+				selectedModelId: next.selectedModelId,
+				lastVerifiedAt: next.lastVerifiedAt,
+			},
+		});
+	}
+
 	updateGroqSelectedModel(modelId: GroqModelId): void {
 		const current = this.getGroqConfig();
 		if (!current) {
@@ -214,6 +356,34 @@ export class CloudProviderStore {
 		}
 
 		this.saveDeepgramConfig({
+			...current,
+			selectedModelId: modelId,
+		});
+	}
+
+	updateAssemblyAISelectedModel(modelId: AssemblyAIModelId): void {
+		const current = this.getAssemblyAIConfig();
+		if (!current) {
+			throw new Error(
+				"Connect AssemblyAI before selecting an AssemblyAI model.",
+			);
+		}
+
+		this.saveAssemblyAIConfig({
+			...current,
+			selectedModelId: modelId,
+		});
+	}
+
+	updateOpenRouterSelectedModel(modelId: OpenRouterModelId): void {
+		const current = this.getOpenRouterConfig();
+		if (!current) {
+			throw new Error(
+				"Connect OpenRouter before selecting an OpenRouter model.",
+			);
+		}
+
+		this.saveOpenRouterConfig({
 			...current,
 			selectedModelId: modelId,
 		});
@@ -241,6 +411,36 @@ export class CloudProviderStore {
 		}
 
 		delete current.deepgram;
+		if (Object.keys(current).length === 0) {
+			rmSync(this.filePath, { force: true });
+			return;
+		}
+
+		this.writeFile(current);
+	}
+
+	removeAssemblyAIConfig(): void {
+		const current = this.readFile();
+		if (!current.assemblyai) {
+			return;
+		}
+
+		delete current.assemblyai;
+		if (Object.keys(current).length === 0) {
+			rmSync(this.filePath, { force: true });
+			return;
+		}
+
+		this.writeFile(current);
+	}
+
+	removeOpenRouterConfig(): void {
+		const current = this.readFile();
+		if (!current.openrouter) {
+			return;
+		}
+
+		delete current.openrouter;
 		if (Object.keys(current).length === 0) {
 			rmSync(this.filePath, { force: true });
 			return;

@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { rpcClient } from "@/mainview/rpc-client";
 import type {
+	AssemblyAIModelId,
 	DeepgramModelId,
 	GroqModelId,
 	LocalModelId,
 	ModelId,
+	OpenRouterModelId,
 } from "@/shared/models";
 import type { AppSnapshot, ToastPayload } from "@/shared/rpc";
 
@@ -36,6 +38,10 @@ export interface UseDictateRuntimeResult {
 	isRemovingGroq: boolean;
 	isConfiguringDeepgram: boolean;
 	isRemovingDeepgram: boolean;
+	isConfiguringAssemblyAI: boolean;
+	isRemovingAssemblyAI: boolean;
+	isConfiguringOpenRouter: boolean;
+	isRemovingOpenRouter: boolean;
 	isUpdatingSettings: boolean;
 	isLoading: boolean;
 	runtimeError: RuntimeErrorState;
@@ -52,6 +58,16 @@ export interface UseDictateRuntimeResult {
 		modelId: DeepgramModelId,
 	) => Promise<void>;
 	removeDeepgramProvider: () => Promise<void>;
+	configureAssemblyAIProvider: (
+		apiKey: string,
+		modelId: AssemblyAIModelId,
+	) => Promise<void>;
+	removeAssemblyAIProvider: () => Promise<void>;
+	configureOpenRouterProvider: (
+		apiKey: string,
+		modelId: OpenRouterModelId,
+	) => Promise<void>;
+	removeOpenRouterProvider: () => Promise<void>;
 	installAccelerationRuntime: (mode: "cuda") => Promise<boolean>;
 	startDictation: () => Promise<void>;
 	updateSetting: (
@@ -80,6 +96,10 @@ export function useDictateRuntime(): UseDictateRuntimeResult {
 	const [isRemovingGroq, setIsRemovingGroq] = useState(false);
 	const [isConfiguringDeepgram, setIsConfiguringDeepgram] = useState(false);
 	const [isRemovingDeepgram, setIsRemovingDeepgram] = useState(false);
+	const [isConfiguringAssemblyAI, setIsConfiguringAssemblyAI] = useState(false);
+	const [isRemovingAssemblyAI, setIsRemovingAssemblyAI] = useState(false);
+	const [isConfiguringOpenRouter, setIsConfiguringOpenRouter] = useState(false);
+	const [isRemovingOpenRouter, setIsRemovingOpenRouter] = useState(false);
 	const [isUpdatingSettings, setIsUpdatingSettings] = useState(false);
 
 	useEffect(() => {
@@ -364,6 +384,76 @@ export function useDictateRuntime(): UseDictateRuntimeResult {
 		}
 	}, []);
 
+	const configureAssemblyAIProvider = useCallback(
+		async (apiKey: string, modelId: AssemblyAIModelId): Promise<void> => {
+			setIsConfiguringAssemblyAI(true);
+			try {
+				const snapshot = await rpcClient.configureAssemblyAIProvider(
+					apiKey,
+					modelId,
+				);
+				setSnapshot(snapshot);
+			} catch (error) {
+				void rpcClient.reportRendererError(
+					"configureAssemblyAIProvider",
+					error,
+				);
+				throw error;
+			} finally {
+				setIsConfiguringAssemblyAI(false);
+			}
+		},
+		[],
+	);
+
+	const removeAssemblyAIProvider = useCallback(async (): Promise<void> => {
+		setIsRemovingAssemblyAI(true);
+		try {
+			const snapshot = await rpcClient.removeAssemblyAIProvider();
+			setSnapshot(snapshot);
+		} catch (error) {
+			void rpcClient.reportRendererError("removeAssemblyAIProvider", error);
+			throw error;
+		} finally {
+			setIsRemovingAssemblyAI(false);
+		}
+	}, []);
+
+	const configureOpenRouterProvider = useCallback(
+		async (apiKey: string, modelId: OpenRouterModelId): Promise<void> => {
+			setIsConfiguringOpenRouter(true);
+			try {
+				const snapshot = await rpcClient.configureOpenRouterProvider(
+					apiKey,
+					modelId,
+				);
+				setSnapshot(snapshot);
+			} catch (error) {
+				void rpcClient.reportRendererError(
+					"configureOpenRouterProvider",
+					error,
+				);
+				throw error;
+			} finally {
+				setIsConfiguringOpenRouter(false);
+			}
+		},
+		[],
+	);
+
+	const removeOpenRouterProvider = useCallback(async (): Promise<void> => {
+		setIsRemovingOpenRouter(true);
+		try {
+			const snapshot = await rpcClient.removeOpenRouterProvider();
+			setSnapshot(snapshot);
+		} catch (error) {
+			void rpcClient.reportRendererError("removeOpenRouterProvider", error);
+			throw error;
+		} finally {
+			setIsRemovingOpenRouter(false);
+		}
+	}, []);
+
 	const startDictation = useCallback(async (): Promise<void> => {
 		setIsDictating(true);
 		try {
@@ -402,6 +492,10 @@ export function useDictateRuntime(): UseDictateRuntimeResult {
 		isRemovingGroq,
 		isConfiguringDeepgram,
 		isRemovingDeepgram,
+		isConfiguringAssemblyAI,
+		isRemovingAssemblyAI,
+		isConfiguringOpenRouter,
+		isRemovingOpenRouter,
 		isUpdatingSettings,
 		isLoading: !snapshot || !settings,
 		runtimeError,
@@ -412,6 +506,10 @@ export function useDictateRuntime(): UseDictateRuntimeResult {
 		removeGroqProvider,
 		configureDeepgramProvider,
 		removeDeepgramProvider,
+		configureAssemblyAIProvider,
+		removeAssemblyAIProvider,
+		configureOpenRouterProvider,
+		removeOpenRouterProvider,
 		installAccelerationRuntime,
 		startDictation,
 		updateSetting,
