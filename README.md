@@ -80,6 +80,12 @@ The app is designed around one primary interaction:
 6. Keep `ASR Acceleration` on `Auto` unless you specifically want to force `CPU` or `CUDA`.
 7. Select the model you want as default.
 
+Notes:
+
+- Local models warm up after you select them, especially larger NVIDIA models.
+- The first local transcription can be slower while the runtime loads the model into memory.
+- Once warm, later local transcriptions are much faster.
+
 Groq setup:
 
 - Get an API key from [Groq API Keys](https://console.groq.com/keys/)
@@ -153,7 +159,9 @@ Important:
 
 - GPU models require compatible NVIDIA hardware.
 - TensorRT is planned, but not shipped in the current build. NVIDIA models currently run on the PyTorch CUDA path.
-- The first transcription after launch can be slower because the selected model has to warm up.
+- Local models require a warm-up step after launch or model changes.
+- The first local transcription can be slower because the selected model has to load and warm up.
+- The app shows warm-up state in the `Models` page for installed local models.
 
 ## Development Setup
 
