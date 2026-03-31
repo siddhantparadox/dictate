@@ -9,7 +9,6 @@ import {
 	modelRuntimeLabel,
 	modelStatusClass,
 	modelStatusLabel,
-	pillLabel,
 	warmupStateLabel,
 } from "./view-model";
 
@@ -22,24 +21,6 @@ interface OverviewSectionProps {
 	settings: AppSnapshot["settings"];
 	viewModel: DashboardViewModel;
 }
-
-const SIGNAL_BARS = [
-	{ id: "a", height: 10 },
-	{ id: "b", height: 18 },
-	{ id: "c", height: 28 },
-	{ id: "d", height: 44 },
-	{ id: "e", height: 58 },
-	{ id: "f", height: 42 },
-	{ id: "g", height: 24 },
-	{ id: "h", height: 12 },
-	{ id: "i", height: 16 },
-	{ id: "j", height: 34 },
-	{ id: "k", height: 52 },
-	{ id: "l", height: 40 },
-	{ id: "m", height: 22 },
-	{ id: "n", height: 14 },
-	{ id: "o", height: 8 },
-];
 
 function countWords(text: string): number {
 	return text.trim().split(/\s+/).filter(Boolean).length;
@@ -181,25 +162,6 @@ export function OverviewSection({
 								<Mic className="h-4 w-4" />
 							)}
 						</button>
-						<div className="quick-test-signal">
-							<div className="quick-test-meta-row">
-								<p className="surface-label">Input signal</p>
-								<p className="quick-test-reading">
-									{runtime.isDictating
-										? "Live"
-										: pillLabel(snapshot.pill.state)}
-								</p>
-							</div>
-							<div className="overview-signal-bars" aria-hidden="true">
-								{SIGNAL_BARS.map((bar) => (
-									<span
-										key={bar.id}
-										className="signal-bar"
-										style={{ height: `${bar.height}%` }}
-									/>
-								))}
-							</div>
-						</div>
 						<div className="quick-test-copy">
 							<p className="quick-test-title">
 								{runtime.isDictating ? "Listening" : "Press to test"}

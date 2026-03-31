@@ -4,6 +4,15 @@ Minimal voice typing for desktop.
 
 Hold `Ctrl+Shift`, speak, release, and Dictate transcribes locally into the active text field. The project is intentionally narrow: fast hold-to-talk dictation with clean model management, low-friction setup, and no extra workflow.
 
+## Release Status
+
+Dictate is currently in `beta` for its initial open-source release.
+
+- Windows-first desktop app
+- Local CPU and cloud dictation are the most stable paths today
+- Local NVIDIA GPU support is available, but still evolving
+- TensorRT is planned, not shipped in the current build
+
 ## What It Is
 
 Dictate is a Windows-first desktop app built with:
@@ -118,7 +127,7 @@ Cloud transcription is optional and uses your own provider API key.
 Important:
 
 - GPU models require compatible NVIDIA hardware.
-- TensorRT is not configured in the current build. NVIDIA models currently run on the PyTorch CUDA path.
+- TensorRT is planned, but not shipped in the current build. NVIDIA models currently run on the PyTorch CUDA path.
 - The first transcription after launch can be slower because the selected model has to warm up.
 
 ## Development Setup
@@ -211,9 +220,13 @@ dictate-app/
 ## Known Limitations
 
 - Windows is the primary supported platform today.
+- This is a beta release, not a stable `v1`.
 - Auto-paste is currently Windows-only and uses clipboard + `Ctrl+V`.
 - `Launch on startup` is implemented on Windows via the current user's `Run` registry entry and opens tray-first on login.
 - GPU acceleration depends on the installed sidecar runtime, CUDA availability, and compatible hardware.
+- Local NVIDIA GPU support is still evolving and needs more real-world validation across drivers, CUDA environments, and hardware tiers.
+- TensorRT is not available in the current build. A rollout plan exists in [docs/plans/2026-03-30-tensorrt-rollout-plan.md](D:/projects/dictate/docs/plans/2026-03-30-tensorrt-rollout-plan.md).
+- Cloud provider flows depend on your own API key, provider account limits, and provider-side model availability.
 
 ## Contributing
 

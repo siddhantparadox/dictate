@@ -556,7 +556,7 @@
 
 .quick-test-strip {
 	display: grid;
-	grid-template-columns: auto minmax(0, 1fr) auto;
+	grid-template-columns: auto minmax(0, 1fr);
 	align-items: center;
 	gap: 1rem;
 	padding: 0.86rem 1rem;
@@ -593,18 +593,6 @@
 	transform: none;
 }
 
-.quick-test-signal {
-	display: grid;
-	gap: 0.45rem;
-}
-
-.quick-test-meta-row {
-	display: flex;
-	align-items: center;
-	justify-content: space-between;
-	gap: 0.75rem;
-}
-
 .quick-test-reading,
 .history-row-time,
 .settings-value {
@@ -612,28 +600,6 @@
 	font-size: 0.8125rem;
 	font-weight: 600;
 	color: var(--text-secondary);
-}
-
-.overview-signal-bars {
-	display: flex;
-	align-items: flex-end;
-	gap: 0.18rem;
-	height: 2.6rem;
-}
-
-.signal-bar {
-	width: 0.2rem;
-	border-radius: 999px;
-	background: hsl(var(--primary) / 0.86);
-	opacity: 0.96;
-}
-
-.signal-bar:nth-child(3n) {
-	opacity: 0.48;
-}
-
-.signal-bar:nth-child(4n) {
-	opacity: 0.7;
 }
 
 .quick-test-copy {
