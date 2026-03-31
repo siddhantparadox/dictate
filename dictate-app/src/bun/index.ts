@@ -1080,7 +1080,7 @@ function resolveModelRuntimeProfile(
 		detail =
 			settings.accelerationMode === "cuda"
 				? "CUDA was requested but runtime is not CUDA-active; running fallback path."
-				: "CUDA runtime is not active; TensorRT is unavailable and PyTorch GPU path is idle.";
+				: "CUDA runtime is not active; the GPU inference path is idle.";
 		return {
 			targetEngine,
 			activeEngine,
@@ -1097,8 +1097,7 @@ function resolveModelRuntimeProfile(
 	if (targetEngine === "tensorrt") {
 		detail = "TensorRT enforced by policy for this model/runtime.";
 	} else {
-		detail =
-			"Running PyTorch CUDA path. TensorRT is not configured for this model in this build.";
+		detail = "Running PyTorch CUDA path.";
 	}
 
 	return {

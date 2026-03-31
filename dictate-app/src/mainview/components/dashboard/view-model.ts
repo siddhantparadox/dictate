@@ -686,15 +686,6 @@ export function buildOverviewMessages(args: {
 				"Parakeet and Canary improve accuracy but use more GPU memory than Moonshine models.",
 			);
 		}
-
-		if (
-			args.selectedModelRuntime?.strictTensorRtWhenSupported &&
-			!args.selectedModelRuntime.tensorRtSupported
-		) {
-			tips.push(
-				"TensorRT policy is enabled globally, but this model currently runs on PyTorch in this build.",
-			);
-		}
 	}
 
 	if (args.snapshot.pill.state === "failure") {
