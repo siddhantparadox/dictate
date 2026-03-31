@@ -79,6 +79,9 @@ const FALLBACK_HOTKEY = "Ctrl+Shift";
 const PILL_WINDOW_WIDTH = 460;
 const PILL_WINDOW_HEIGHT = 72;
 const PILL_WINDOW_BOTTOM_MARGIN = 22;
+const MAIN_WINDOW_DEFAULT_WIDTH = 1520;
+const MAIN_WINDOW_DEFAULT_HEIGHT = 1100;
+const MAIN_WINDOW_SCREEN_MARGIN = 48;
 const PILL_HIDE_DELAY_MS = 1300;
 const PILL_FRAME_INTERVAL_MS = 33;
 const MIC_LEVEL_STALE_MS = 180;
@@ -3389,19 +3392,46 @@ function syncWindowFrameToContentBounds(
 	}, 0);
 }
 
+function getCenteredMainWindowFrame(
+	minimumWidth: number,
+	minimumHeight: number,
+): { x: number; y: number; width: number; height: number } {
+	const display = getDisplayForCursor();
+	const availableWidth = Math.max(
+		minimumWidth,
+		display.workArea.width - MAIN_WINDOW_SCREEN_MARGIN * 2,
+	);
+	const availableHeight = Math.max(
+		minimumHeight,
+		display.workArea.height - MAIN_WINDOW_SCREEN_MARGIN * 2,
+	);
+	const width = Math.max(
+		minimumWidth,
+		Math.min(MAIN_WINDOW_DEFAULT_WIDTH, availableWidth),
+	);
+	const height = Math.max(
+		minimumHeight,
+		Math.min(MAIN_WINDOW_DEFAULT_HEIGHT, availableHeight),
+	);
+	const x = Math.round(
+		display.workArea.x + (display.workArea.width - width) / 2,
+	);
+	const y = Math.round(
+		display.workArea.y + (display.workArea.height - height) / 2,
+	);
+
+	return { x, y, width, height };
+}
+
 function createMainWindow(viewUrl: string): BrowserWindow {
 	const minimumWidth = 980;
 	const minimumHeight = 820;
+	const initialFrame = getCenteredMainWindowFrame(minimumWidth, minimumHeight);
 	const windowRef = new BrowserWindow({
 		title: "Dictate",
 		url: withViewQuery(viewUrl, "main"),
 		rpc: mainRpc,
-		frame: {
-			width: 1160,
-			height: 900,
-			x: 160,
-			y: 100,
-		},
+		frame: initialFrame,
 	});
 
 	// On Windows with native chrome, force one post-create frame sync so the
