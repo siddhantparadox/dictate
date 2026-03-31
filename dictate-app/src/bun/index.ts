@@ -91,7 +91,7 @@ const MIC_LEVEL_ATTACK_ALPHA = 0.64;
 const MIC_LEVEL_RELEASE_ALPHA = 0.24;
 const MODIFIER_HOTKEY_POLL_MS = 30;
 const MODIFIER_HOTKEY_REARM_MS = 120;
-const CUDA_PROBE_TIMEOUT_MS = 6_000;
+const CUDA_PROBE_TIMEOUT_MS = 12_000;
 const HF_XET_PROBE_TIMEOUT_MS = 4_000;
 const HF_XET_INSTALL_TIMEOUT_MS = 6 * 60_000;
 const MODEL_WARMUP_BOOT_DELAY_MS = 320;
@@ -137,6 +137,7 @@ function probeSidecarCudaAvailability(
 	}
 
 	try {
+		const startedAt = Date.now();
 		const result = spawnSync(
 			pythonBin,
 			[
@@ -150,15 +151,28 @@ function probeSidecarCudaAvailability(
 			},
 		);
 		if (result.status !== 0 || !result.stdout.trim()) {
+			const durationMs = Date.now() - startedAt;
+			const errorMessage =
+				result.error instanceof Error ? result.error.message : null;
+			const stderr = result.stderr.trim();
+			console.warn(
+				`[sidecar] CUDA probe failed for ${pythonBin} after ${durationMs}ms (status=${result.status ?? "null"} signal=${result.signal ?? "none"}${errorMessage ? ` error=${errorMessage}` : ""})${stderr ? ` stderr=${stderr}` : ""}`,
+			);
 			return typeof cached === "boolean" ? cached : null;
 		}
 		const parsed = JSON.parse(result.stdout) as { cuda?: unknown };
 		if (typeof parsed.cuda !== "boolean") {
+			console.warn(
+				`[sidecar] CUDA probe returned unexpected payload for ${pythonBin}: ${result.stdout.trim()}`,
+			);
 			return typeof cached === "boolean" ? cached : null;
 		}
 		runtimeProbeCache.set(pythonBin, parsed.cuda);
 		return parsed.cuda;
-	} catch {
+	} catch (error) {
+		console.warn(
+			`[sidecar] CUDA probe crashed for ${pythonBin}: ${error instanceof Error ? error.message : String(error)}`,
+		);
 		return typeof cached === "boolean" ? cached : null;
 	}
 }
@@ -507,7 +521,7 @@ function resolveSidecarRuntime(mode: AccelerationMode): ResolvedSidecarRuntime {
 	return {
 		...cpuRuntime,
 		warning: sawCudaCandidate
-			? "CUDA mode was selected, but the CUDA interpreter is not CUDA-enabled."
+			? "CUDA mode was selected, but the CUDA runtime probe did not confirm a working CUDA interpreter. Check the startup logs for the exact probe failure."
 			: "CUDA mode was selected, but no CUDA sidecar runtime is installed. Run: pwsh -File sidecar/bootstrap.ps1 -Runtime cuda",
 	};
 }
@@ -1120,6 +1134,96 @@ function buildWarmupSignature(modelId: LocalModelId): string {
 	].join("|");
 }
 
+function isLocalModelWarm(modelId: LocalModelId): boolean {
+	return lastWarmupSignature === buildWarmupSignature(modelId);
+}
+
+async function warmLocalModelNow(
+	modelId: LocalModelId,
+	reason: string,
+): Promise<boolean> {
+	const signature = buildWarmupSignature(modelId);
+	if (lastWarmupSignature === signature) {
+		setWarmupState({
+			state: "ready",
+			modelId,
+			detail: `${getModelLabel(modelId)} is warm and ready.`,
+		});
+		await broadcastSnapshot({ target: "main" });
+		return true;
+	}
+
+	console.log(`[warmup] begin model=${modelId} reason=${reason}`);
+	setWarmupState({
+		state: "loading_runtime",
+		modelId,
+		detail: `Loading runtime for ${getModelLabel(modelId)}...`,
+	});
+	await broadcastSnapshot({ target: "main" });
+
+	setWarmupState({
+		state: "loading_model",
+		modelId,
+		detail: `Loading ${getModelLabel(modelId)} into memory...`,
+	});
+	await broadcastSnapshot({ target: "main" });
+
+	try {
+		await sidecar.prepareModel(modelId);
+
+		setWarmupState({
+			state: "warming_up",
+			modelId,
+			detail: `Finalizing warm-up for ${getModelLabel(modelId)}...`,
+		});
+		await broadcastSnapshot({ target: "main" });
+		await sleep(MODEL_WARMUP_STAGE_DELAY_MS);
+
+		lastWarmupSignature = signature;
+		setModelProgress(modelId, null);
+		setWarmupState({
+			state: "ready",
+			modelId,
+			detail: `${getModelLabel(modelId)} is warm and ready.`,
+		});
+		await broadcastSnapshot({ target: "main" });
+		console.log(`[warmup] ready model=${modelId} reason=${reason}`);
+		return true;
+	} catch (error) {
+		const message =
+			error instanceof Error ? error.message : "Unknown warm-up error.";
+		setWarmupState({
+			state: "error",
+			modelId,
+			detail: message,
+		});
+		await broadcastSnapshot({ target: "main" });
+		console.warn(`[warmup] failed reason=${reason}: ${message}`);
+		return false;
+	}
+}
+
+async function runExclusiveWarmLocalModel(
+	modelId: LocalModelId,
+	reason: string,
+): Promise<boolean> {
+	if (warmupInFlight) {
+		warmupPending = true;
+		return false;
+	}
+
+	warmupInFlight = true;
+	try {
+		return await warmLocalModelNow(modelId, reason);
+	} finally {
+		warmupInFlight = false;
+		if (warmupPending) {
+			warmupPending = false;
+			triggerSelectedModelWarmup("queued");
+		}
+	}
+}
+
 function triggerSelectedModelWarmup(reason: string): void {
 	if (warmupInFlight) {
 		warmupPending = true;
@@ -1186,61 +1290,7 @@ function triggerSelectedModelWarmup(reason: string): void {
 				return;
 			}
 
-			const signature = buildWarmupSignature(modelId);
-			if (lastWarmupSignature === signature) {
-				setWarmupState({
-					state: "ready",
-					modelId,
-					detail: `${getModelLabel(modelId)} is warm and ready.`,
-				});
-				await broadcastSnapshot({ target: "main" });
-				return;
-			}
-
-			console.log(`[warmup] begin model=${modelId} reason=${reason}`);
-			setWarmupState({
-				state: "loading_runtime",
-				modelId,
-				detail: `Loading runtime for ${getModelLabel(modelId)}...`,
-			});
-			await broadcastSnapshot({ target: "main" });
-
-			setWarmupState({
-				state: "loading_model",
-				modelId,
-				detail: `Loading ${getModelLabel(modelId)} into memory...`,
-			});
-			await broadcastSnapshot({ target: "main" });
-
-			await sidecar.prepareModel(modelId);
-
-			setWarmupState({
-				state: "warming_up",
-				modelId,
-				detail: `Finalizing warm-up for ${getModelLabel(modelId)}...`,
-			});
-			await broadcastSnapshot({ target: "main" });
-			await sleep(MODEL_WARMUP_STAGE_DELAY_MS);
-
-			lastWarmupSignature = signature;
-			setModelProgress(modelId, null);
-			setWarmupState({
-				state: "ready",
-				modelId,
-				detail: `${getModelLabel(modelId)} is warm and ready.`,
-			});
-			await broadcastSnapshot({ target: "main" });
-			console.log(`[warmup] ready model=${modelId} reason=${reason}`);
-		} catch (error) {
-			const message =
-				error instanceof Error ? error.message : "Unknown warm-up error.";
-			setWarmupState({
-				state: "error",
-				modelId: storage.getSettings().defaultModelId,
-				detail: message,
-			});
-			await broadcastSnapshot({ target: "main" });
-			console.warn(`[warmup] failed reason=${reason}: ${message}`);
+			await warmLocalModelNow(modelId, reason);
 		} finally {
 			warmupInFlight = false;
 			if (warmupPending) {
@@ -2480,9 +2530,11 @@ async function runMicrophoneTranscription(
 		throw new Error("A transcription is already in progress.");
 	}
 
-	isOneShotTranscriptionActive = true;
 	const settings = storage.getSettings();
 	const modelId = settings.defaultModelId;
+	if (warmupInFlight) {
+		throw new Error(`${getModelLabel(modelId)} is still warming up.`);
+	}
 	const unsupportedReason = getUnsupportedModelReason(modelId);
 	if (unsupportedReason) {
 		await sendToast({
@@ -2507,7 +2559,17 @@ async function runMicrophoneTranscription(
 			});
 			throw error;
 		}
+	} else if (!isLocalModelWarm(modelId)) {
+		const warmed = await runExclusiveWarmLocalModel(
+			modelId,
+			"microphone-transcription",
+		);
+		if (!warmed || !isLocalModelWarm(modelId)) {
+			throw new Error(`${getModelLabel(modelId)} is still warming up.`);
+		}
 	}
+
+	isOneShotTranscriptionActive = true;
 	const clampedDuration = Math.max(
 		2,
 		Math.min(20, Math.round(durationSeconds)),
@@ -2591,6 +2653,16 @@ async function startHoldToTalkTranscription(source: string): Promise<void> {
 			});
 			return;
 		}
+	} else if (!isLocalModelWarm(modelId)) {
+		if (!warmupInFlight) {
+			triggerSelectedModelWarmup("hold-to-talk-start");
+		}
+		await sendToast({
+			type: "info",
+			title: "Model warming up",
+			message: `${getModelLabel(modelId)} is still loading. Try again in a moment.`,
+		});
+		return;
 	}
 	const job = createInitialJob(modelId, source);
 	storage.insertJob(job);
@@ -3153,7 +3225,7 @@ function createWindowRpc(windowName: "main" | "pill") {
 						await broadcastSnapshot();
 						return merged;
 					}),
-				setDefaultModel: ({ modelId }) => {
+				setDefaultModel: async ({ modelId }) => {
 					if (isCloudModelId(modelId)) {
 						try {
 							ensureCloudProviderConfig(modelId);
@@ -3181,8 +3253,25 @@ function createWindowRpc(windowName: "main" | "pill") {
 					}
 					storage.updateSettings({ defaultModelId: modelId });
 					lastWarmupSignature = null;
-					triggerSelectedModelWarmup("default-model-change");
-					void broadcastSnapshot();
+					if (isCloudModelId(modelId)) {
+						triggerSelectedModelWarmup("default-model-change");
+					} else {
+						refreshModelsCache();
+						const selectedModel = modelsCache.find(
+							(candidate) => candidate.id === modelId,
+						);
+						const unsupportedReason = getUnsupportedModelReason(modelId);
+						if (
+							selectedModel?.status === "installed" &&
+							!unsupportedReason &&
+							!warmupInFlight
+						) {
+							await runExclusiveWarmLocalModel(modelId, "default-model-change");
+						} else {
+							triggerSelectedModelWarmup("default-model-change");
+						}
+					}
+					await broadcastSnapshot();
 					return getSnapshot();
 				},
 				configureGroqProvider: async ({ apiKey, modelId }) =>
@@ -3432,6 +3521,7 @@ async function bootstrap(): Promise<void> {
 	}
 	trayRef = createTray();
 	ensurePillWindow();
+	sidecar.prestart();
 
 	const settings = storage.getSettings();
 	try {

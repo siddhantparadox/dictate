@@ -516,6 +516,37 @@ def _prepare_model(model_id: str) -> None:
     raise RuntimeError(f"No prepare pipeline configured for model_id: {model_id}")
 
 
+def _build_warmup_probe_audio(sample_rate: int = 16000):
+    try:
+        import numpy as np
+    except Exception:  # noqa: BLE001
+        return None, sample_rate
+
+    seconds = 0.75
+    frame_count = max(int(sample_rate * seconds), sample_rate // 2)
+    t = np.linspace(0.0, seconds, frame_count, endpoint=False, dtype=np.float32)
+    tones = (
+        0.06 * np.sin(2.0 * np.pi * 220.0 * t)
+        + 0.04 * np.sin(2.0 * np.pi * 440.0 * t)
+        + 0.02 * np.sin(2.0 * np.pi * 660.0 * t)
+    )
+    envelope = np.linspace(0.25, 1.0, frame_count, dtype=np.float32)
+    return (tones * envelope).astype(np.float32), sample_rate
+
+
+def _warm_model_inference(model_id: str) -> None:
+    audio, sample_rate = _build_warmup_probe_audio()
+    if audio is None:
+        return
+
+    try:
+        _transcribe_audio(model_id, audio, sample_rate)
+    except Exception:  # noqa: BLE001
+        # The warm-up probe only exists to prime the first inference path.
+        # We intentionally ignore transcript quality or "no speech" failures here.
+        return
+
+
 def _safe_remove_path(path: str, removed_paths: list[str]) -> None:
     if not os.path.exists(path):
         return
@@ -736,6 +767,7 @@ def handle_prepare_model(request_id: str, params: dict[str, Any]) -> None:
 
     try:
         _prepare_model(model_id)
+        _warm_model_inference(model_id)
     except Exception:
         downloaded = _directory_size(repo_dir)
         _emit_prepare_model_progress(
@@ -833,4 +865,5 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
 

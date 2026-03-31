@@ -36,6 +36,7 @@ import {
 	modelStatusClass,
 	modelStatusLabel,
 	resolveModelDisplayStatus,
+	warmupStateLabel,
 } from "./view-model";
 
 interface ModelsSectionProps {
@@ -656,6 +657,12 @@ export function ModelsSection({
 							const isPreparing = runtime.isPreparingModelId === model.id;
 							const isDeleting = runtime.isDeletingModelId === model.id;
 							const isSwitching = runtime.isSelectingModelId === model.id;
+							const isWarmupActive =
+								isActive &&
+								snapshot.warmup.modelId === model.id &&
+								(snapshot.warmup.state === "loading_runtime" ||
+									snapshot.warmup.state === "loading_model" ||
+									snapshot.warmup.state === "warming_up");
 							const modelProgress =
 								snapshot.modelProgressById[model.id] ?? null;
 							const runtimeProfile =
@@ -674,17 +681,23 @@ export function ModelsSection({
 								displayStatus === "switching" ||
 								displayStatus === "deleting";
 							const progressPercent =
-								typeof modelProgress?.progress === "number"
+								!isWarmupActive && typeof modelProgress?.progress === "number"
 									? Math.round(modelProgress.progress * 100)
 									: null;
-							const progressLabel = formatModelProgressLabel({
-								status: displayStatus,
-								progressEntry: modelProgress,
-							});
+							const progressLabel = isWarmupActive
+								? snapshot.warmup.detail
+								: formatModelProgressLabel({
+										status: displayStatus,
+										progressEntry: modelProgress,
+									});
+							const statusLabel = isWarmupActive
+								? warmupStateLabel(snapshot.warmup.state)
+								: modelStatusLabel(displayStatus, isActive);
 							const isConfirmingDelete = confirmDeleteModelId === model.id;
 							const canDownload =
 								!isUnsupported &&
 								!isBusy &&
+								!isWarmupActive &&
 								displayStatus !== "installed" &&
 								runtime.isPreparingModelId === null &&
 								runtime.isDeletingModelId === null &&
@@ -693,12 +706,14 @@ export function ModelsSection({
 								!isUnsupported &&
 								displayStatus === "installed" &&
 								!isActive &&
+								!isWarmupActive &&
 								runtime.isPreparingModelId === null &&
 								runtime.isDeletingModelId === null &&
 								runtime.isSelectingModelId === null;
 							const canDelete =
 								displayStatus === "installed" &&
 								!isDeleting &&
+								!isWarmupActive &&
 								runtime.isPreparingModelId === null &&
 								runtime.isDeletingModelId === null &&
 								runtime.isSelectingModelId === null;
@@ -728,6 +743,20 @@ export function ModelsSection({
 													{modelRuntimeLabel(model.runtime)}
 												</p>
 												<p className="model-notes">{model.notes}</p>
+												{isWarmupActive ? (
+													<div className="model-progress-row model-inline-warmup">
+														<div className="model-status-line pending">
+															<Loader2 className="h-3.5 w-3.5 animate-spin" />
+															<span>{statusLabel}</span>
+														</div>
+														<div className="model-progress">
+															<div className="model-progress-bar indeterminate" />
+														</div>
+														<p className="model-progress-label">
+															{progressLabel}
+														</p>
+													</div>
+												) : null}
 												{runtimeProfile ? (
 													<p className="model-hint">
 														{engineLabel(runtimeProfile.activeEngine)} •{" "}
@@ -755,13 +784,16 @@ export function ModelsSection({
 										</div>
 
 										<div className="model-status-cell">
-											{isBusy ? (
+											{isWarmupActive ? (
+												<div className="model-status-line pending">
+													<Loader2 className="h-3.5 w-3.5 animate-spin" />
+													<span>{statusLabel}</span>
+												</div>
+											) : isBusy ? (
 												<div className="model-progress-inline">
 													<div className="model-status-line pending">
 														<Loader2 className="h-3.5 w-3.5 animate-spin" />
-														<span>
-															{modelStatusLabel(displayStatus, isActive)}
-														</span>
+														<span>{statusLabel}</span>
 													</div>
 													<div className="model-progress">
 														<div
@@ -792,9 +824,7 @@ export function ModelsSection({
 													className={`model-status-line ${modelStatusClass(displayStatus)}`}
 												>
 													<span className="status-dot" aria-hidden="true" />
-													<span>
-														{modelStatusLabel(displayStatus, isActive)}
-													</span>
+													<span>{statusLabel}</span>
 												</div>
 											)}
 										</div>
@@ -806,11 +836,13 @@ export function ModelsSection({
 												disabled={!canActivate}
 												onClick={() => void runtime.selectModel(model.id)}
 											>
-												{displayStatus === "switching"
-													? "Switching"
-													: isActive
-														? "Active"
-														: "Use"}
+												{isWarmupActive
+													? "Warming up"
+													: displayStatus === "switching"
+														? "Switching"
+														: isActive
+															? "Active"
+															: "Use"}
 											</button>
 											<button
 												type="button"

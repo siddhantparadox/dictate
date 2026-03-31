@@ -1137,6 +1137,11 @@
 	gap: 0.35rem;
 }
 
+.model-inline-warmup {
+	margin-top: 0.15rem;
+	max-width: 20rem;
+}
+
 .model-progress {
 	height: 0.24rem;
 	border-radius: 999px;

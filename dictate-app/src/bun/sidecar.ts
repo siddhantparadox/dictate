@@ -185,6 +185,10 @@ export class SidecarClient {
 		return this.status;
 	}
 
+	prestart(): void {
+		this.startIfNeeded();
+	}
+
 	private startIfNeeded(): void {
 		if (this.proc) {
 			return;
