@@ -9,6 +9,9 @@ Hold `Ctrl+Shift`, speak, release, and Dictate transcribes locally into the acti
 Dictate is currently in `beta` for its initial open-source release.
 
 - Windows-first desktop app
+- Windows-only release for now
+- Linux build is planned shortly after the initial release
+- macOS support will take longer
 - Local CPU and cloud dictation are the most stable paths today
 - Local NVIDIA GPU support is available, but still evolving
 - TensorRT is planned, not shipped in the current build
@@ -42,6 +45,28 @@ The app is designed around one primary interaction:
 - CPU and NVIDIA CUDA runtime modes
 - Recent transcription history
 - Light and dark glassmorphism UI
+
+## Screenshots
+
+### Overview
+
+![Dictate Overview](screenshots/Overview.jpg)
+
+### Models: Local
+
+![Dictate Local Models](screenshots/Local%20Models.jpg)
+
+### Models: Cloud
+
+![Dictate Cloud Models](screenshots/Models%20Cloud.jpg)
+
+### History
+
+![Dictate History](screenshots/History.jpg)
+
+### Settings
+
+![Dictate Settings](screenshots/Settings.jpg)
 
 ## Usage
 
@@ -220,6 +245,9 @@ dictate-app/
 ## Known Limitations
 
 - Windows is the primary supported platform today.
+- The current open-source beta release is Windows-only.
+- Linux support is planned shortly after the initial Windows release.
+- macOS support will take more time because platform-specific packaging, permissions, and runtime validation are still pending.
 - This is a beta release, not a stable `v1`.
 - Auto-paste is currently Windows-only and uses clipboard + `Ctrl+V`.
 - `Launch on startup` is implemented on Windows via the current user's `Run` registry entry and opens tray-first on login.
