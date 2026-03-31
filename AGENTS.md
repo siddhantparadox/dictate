@@ -43,4 +43,18 @@
 - Run lint and typechecks after code changes.
 - Use the latest stable releases of tools/libraries.
 
+## Review guidelines
+- Focus on P0 and P1 issues: security, privacy, crashes, data loss, broken dictation flows, or release-blocking regressions.
+- Prioritize user-visible regressions in core flows: app launch, tray startup, global hotkey, pill overlay, recording, transcription, paste, and model switching.
+- Treat any exposure of API keys, transcript contents, microphone audio, or clipboard contents outside intended storage and transport paths as P1.
+- Treat sending audio to a cloud provider when a local model is selected, or routing audio to the wrong cloud provider or model, as P1.
+- Treat failures in local model warm-up, CUDA runtime detection, sidecar startup, or first-use transcription as P1 when they block the app from working.
+- Treat platform-specific assumptions as high priority when they break portability, especially hard-coded Windows behavior leaking into shared code paths.
+- Flag missing platform guards around Windows-specific behavior such as auto-paste, startup registration, PowerShell usage, and native window APIs.
+- Review macOS and Linux contributions for correctness and portability even though the current beta release is Windows-only.
+- Flag changes that make future Linux or macOS support harder, especially unnecessary platform coupling in shared runtime, UI, or storage code.
+- Flag changes that would break fresh-machine setup, model downloads, provider configuration, or persisted model/provider state.
+- Prioritize correctness over style. Ignore minor naming, formatting, copy, or UI polish issues unless they cause a behavioral problem.
+- When possible, describe the concrete user-facing failure mode and the shortest reproduction path.
+
 ## This Document is evolving and will evolve as the project evolves. This is a living document.
