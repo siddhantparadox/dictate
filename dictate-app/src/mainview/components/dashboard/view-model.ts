@@ -714,19 +714,22 @@ export function buildDashboardViewModel(args: {
 	settings: AppSnapshot["settings"];
 }): DashboardViewModel {
 	const { runtime, snapshot, settings } = args;
+	const selectedModelId = settings.defaultModelId;
+	const selectedModel = isLocalModelId(selectedModelId)
+		? (runtime.models.find((model) => model.id === selectedModelId) ?? null)
+		: null;
+	const selectedModelRequiresCudaRuntime =
+		selectedModel?.runtime === "nvidia_gpu";
 	const showCudaInstaller =
 		settings.accelerationMode === "cuda" &&
-		snapshot.hardware.asrRuntime === "cpu";
+		snapshot.hardware.asrRuntime === "cpu" &&
+		selectedModelRequiresCudaRuntime;
 	const isCudaRuntimePending =
 		settings.accelerationMode === "cuda" &&
 		snapshot.hardware.asrRuntime === "unknown";
 	const isInstallingCuda =
 		snapshot.accelerationInstaller.status === "installing" &&
 		snapshot.accelerationInstaller.mode === "cuda";
-	const selectedModelId = settings.defaultModelId;
-	const selectedModel = isLocalModelId(selectedModelId)
-		? (runtime.models.find((model) => model.id === selectedModelId) ?? null)
-		: null;
 	const selectedCloudModel = isCloudModelId(selectedModelId)
 		? getCloudModelOption(selectedModelId)
 		: null;

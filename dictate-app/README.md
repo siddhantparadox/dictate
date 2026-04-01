@@ -17,7 +17,10 @@ bun run dev:hmr
 bun run typecheck
 bun run lint
 bun run build:canary
+bun run build:canary:installer
 ```
+
+`build:canary` produces the Electrobun canary payload and updater artifacts. `build:canary:installer` wraps that payload in the per-user Inno Setup installer used for Windows releases.
 
 ## Sidecar Setup
 

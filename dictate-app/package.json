@@ -29,7 +29,8 @@
 		"dev": "electrobun dev --watch",
 		"dev:hmr": "concurrently \"bun run hmr\" \"bun run start\"",
 		"hmr": "vite --port 5173",
-		"build:canary": "vite build && electrobun build --env=canary",
+		"build:canary": "vite build && electrobun build --env=canary && pwsh -File scripts/post-canary-package.ps1",
+		"build:canary:installer": "pwsh -File scripts/build-inno-installer.ps1",
 		"typecheck": "tsc --noEmit -p tsconfig.typecheck.json",
 		"lint": "biome check src sidecar/worker.py sidecar/bootstrap.ps1 sidecar/requirements.txt README.md package.json components.json electrobun.config.ts postcss.config.js tailwind.config.js tsconfig.json tsconfig.typecheck.json vite.config.ts"
 	},

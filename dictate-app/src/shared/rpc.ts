@@ -132,6 +132,8 @@ export interface AppSnapshot {
 		status: "idle" | "installing" | "success" | "error";
 		mode: "cuda" | null;
 		message: string;
+		detail: string;
+		progress: number | null;
 		updatedAt: string;
 	};
 	modelProgressById: Partial<

@@ -2,6 +2,7 @@ import { dlopen, FFIType, type Library, type Pointer, suffix } from "bun:ffi";
 import { spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import {
+	copyFileSync,
 	existsSync,
 	mkdirSync,
 	readdirSync,
@@ -9,7 +10,7 @@ import {
 	rmSync,
 } from "node:fs";
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { join, resolve, sep } from "node:path";
 import Electrobun, {
 	BrowserView,
 	BrowserWindow,
@@ -382,6 +383,9 @@ function migrateLegacyHfCache(hfHubDir: string): void {
 
 function resolveSidecarScriptPath(): string {
 	const candidates = [
+		resolve(import.meta.dir, "..", "sidecar", "worker.py"),
+		resolve(process.cwd(), "..", "Resources", "app", "sidecar", "worker.py"),
+		resolve(process.cwd(), "Resources", "app", "sidecar", "worker.py"),
 		resolve(process.cwd(), "sidecar", "worker.py"),
 		resolve(import.meta.dir, "..", "..", "sidecar", "worker.py"),
 		resolve(import.meta.dir, "..", "..", "..", "..", "sidecar", "worker.py"),
@@ -398,6 +402,36 @@ function resolveSidecarScriptPath(): string {
 		`[sidecar] worker.py not found. cwd=${process.cwd()} importDir=${import.meta.dir} candidates=${candidates.join(" | ")}`,
 	);
 	return candidates[0];
+}
+
+function isBundledSidecarPath(sidecarWorkerPath: string): boolean {
+	const normalized = sidecarWorkerPath.replaceAll("/", sep);
+	const bundledSegment = `${sep}Resources${sep}app${sep}sidecar${sep}`;
+	return normalized.includes(bundledSegment);
+}
+
+function materializeBundledSidecarWorkspace(
+	sidecarWorkerPath: string,
+	dictateHomePath: string,
+): string {
+	if (!isBundledSidecarPath(sidecarWorkerPath)) {
+		return sidecarWorkerPath;
+	}
+
+	const bundledSidecarDir = resolve(sidecarWorkerPath, "..");
+	const runtimeSidecarDir = ensureDirectory(join(dictateHomePath, "sidecar"));
+	const sidecarFiles = ["worker.py", "bootstrap.ps1", "requirements.txt"];
+
+	for (const filename of sidecarFiles) {
+		const sourcePath = join(bundledSidecarDir, filename);
+		const targetPath = join(runtimeSidecarDir, filename);
+		if (!existsSync(sourcePath)) {
+			continue;
+		}
+		copyFileSync(sourcePath, targetPath);
+	}
+
+	return join(runtimeSidecarDir, "worker.py");
 }
 
 function resolveSidecarBootstrapScriptPath(sidecarWorkerPath: string): string {
@@ -417,12 +451,15 @@ function resolvePowerShellExecutable(): string {
 }
 
 const storage = new DictateStorage(Utils.paths.userData);
-const sidecarScript = resolveSidecarScriptPath();
-const sidecarBootstrapScript = resolveSidecarBootstrapScriptPath(sidecarScript);
-const sidecarProjectRoot = resolve(sidecarScript, "..", "..");
 const dictateHomeDir = ensureDirectory(
 	process.env.DICTATE_HOME ?? join(homedir(), ".dictateapp"),
 );
+const sidecarScript = materializeBundledSidecarWorkspace(
+	resolveSidecarScriptPath(),
+	dictateHomeDir,
+);
+const sidecarBootstrapScript = resolveSidecarBootstrapScriptPath(sidecarScript);
+const sidecarProjectRoot = resolve(sidecarScript, "..", "..");
 const cloudProviderStore = new CloudProviderStore(dictateHomeDir);
 const dictateModelsDir = ensureDirectory(join(dictateHomeDir, "models"));
 const dictateHfHomeDir = ensureDirectory(join(dictateModelsDir, "huggingface"));
@@ -625,6 +662,7 @@ let mainWindow: BrowserWindow | null = null;
 let pillWindow: BrowserWindow | null = null;
 let trayRef: Tray | null = null;
 let mainViewUrl: string | null = null;
+let pillViewUrl: string | null = null;
 let shuttingDown = false;
 let hidePillTimer: ReturnType<typeof setTimeout> | null = null;
 let recordingTicker: ReturnType<typeof setInterval> | null = null;
@@ -837,6 +875,8 @@ let accelerationInstallerState: AppSnapshot["accelerationInstaller"] = {
 	status: "idle",
 	mode: null,
 	message: "",
+	detail: "",
+	progress: null,
 	updatedAt: new Date().toISOString(),
 };
 let warmupState: WarmupState = {
@@ -879,6 +919,48 @@ function setAccelerationInstallerState(
 	};
 }
 
+const RUNTIME_INSTALL_PROGRESS_PREFIX = "[dictate-progress]";
+
+function normalizeAccelerationInstallProgress(
+	value: number | null,
+): number | null {
+	if (typeof value !== "number" || !Number.isFinite(value)) {
+		return null;
+	}
+	if (value <= 0) {
+		return 0;
+	}
+	if (value >= 1) {
+		return 1;
+	}
+	return value;
+}
+
+function parseAccelerationInstallProgressLine(
+	line: string,
+): { message: string; detail: string; progress: number | null } | null {
+	if (!line.startsWith(RUNTIME_INSTALL_PROGRESS_PREFIX)) {
+		return null;
+	}
+
+	try {
+		const parsed = JSON.parse(
+			line.slice(RUNTIME_INSTALL_PROGRESS_PREFIX.length),
+		) as { message?: unknown; detail?: unknown; progress?: unknown };
+		return {
+			message:
+				typeof parsed.message === "string"
+					? parsed.message
+					: "Installing Dictate GPU runtime",
+			detail: typeof parsed.detail === "string" ? parsed.detail : "",
+			progress: normalizeAccelerationInstallProgress(
+				typeof parsed.progress === "number" ? parsed.progress : null,
+			),
+		};
+	} catch {
+		return null;
+	}
+}
 function setWarmupState(next: Omit<WarmupState, "updatedAt">): void {
 	warmupState = {
 		...next,
@@ -1463,22 +1545,74 @@ async function runAccelerationBootstrapInstall(mode: "cuda"): Promise<void> {
 		});
 
 		let stderrBuffer = "";
+		let stdoutRemainder = "";
+		let stderrRemainder = "";
 
-		child.stdout.on("data", (chunk) => {
-			const output = String(chunk).trim();
-			if (!output) {
+		const handleOutputLine = (output: string, source: "stdout" | "stderr") => {
+			const progressUpdate =
+				source === "stdout"
+					? parseAccelerationInstallProgressLine(output)
+					: null;
+			if (progressUpdate) {
+				setAccelerationInstallerState({
+					status: "installing",
+					mode,
+					message: progressUpdate.message,
+					detail: progressUpdate.detail,
+					progress: progressUpdate.progress,
+				});
+				void broadcastSnapshot({ target: "main" });
 				return;
 			}
+
+			if (source === "stderr") {
+				stderrBuffer = `${stderrBuffer}\n${output}`.trim();
+				console.error(`[runtime-install] ${output}`);
+				return;
+			}
+
 			console.log(`[runtime-install] ${output}`);
+		};
+
+		const flushChunk = (chunk: string, source: "stdout" | "stderr") => {
+			const combined =
+				(source === "stdout" ? stdoutRemainder : stderrRemainder) +
+				chunk.replace(/\r/g, "\n");
+			const segments = combined.split("\n");
+			const remainder = segments.pop() ?? "";
+			if (source === "stdout") {
+				stdoutRemainder = remainder;
+			} else {
+				stderrRemainder = remainder;
+			}
+			for (const segment of segments) {
+				const output = segment.trim();
+				if (!output) {
+					continue;
+				}
+				handleOutputLine(output, source);
+			}
+		};
+
+		const flushRemainders = () => {
+			const trailingStdout = stdoutRemainder.trim();
+			if (trailingStdout) {
+				handleOutputLine(trailingStdout, "stdout");
+				stdoutRemainder = "";
+			}
+			const trailingStderr = stderrRemainder.trim();
+			if (trailingStderr) {
+				handleOutputLine(trailingStderr, "stderr");
+				stderrRemainder = "";
+			}
+		};
+
+		child.stdout.on("data", (chunk) => {
+			flushChunk(String(chunk), "stdout");
 		});
 
 		child.stderr.on("data", (chunk) => {
-			const output = String(chunk).trim();
-			if (!output) {
-				return;
-			}
-			stderrBuffer = `${stderrBuffer}\n${output}`.trim();
-			console.error(`[runtime-install] ${output}`);
+			flushChunk(String(chunk), "stderr");
 		});
 
 		child.on("error", (error) => {
@@ -1488,6 +1622,7 @@ async function runAccelerationBootstrapInstall(mode: "cuda"): Promise<void> {
 		});
 
 		child.on("close", (code) => {
+			flushRemainders();
 			if (code === 0) {
 				resolvePromise();
 				return;
@@ -1500,7 +1635,6 @@ async function runAccelerationBootstrapInstall(mode: "cuda"): Promise<void> {
 		});
 	});
 }
-
 async function applyAccelerationMode(mode: AccelerationMode): Promise<void> {
 	const runtime = resolveSidecarRuntime(mode);
 	sidecar.setPythonBin(runtime.pythonBin);
@@ -1513,10 +1647,10 @@ async function applyAccelerationMode(mode: AccelerationMode): Promise<void> {
 	if (mode === "cuda" && runtime.runtime !== "cuda") {
 		await sendToast({
 			type: "warning",
-			title: "CUDA unavailable",
+			title: "GPU runtime unavailable",
 			message:
 				runtime.warning ??
-				"CUDA runtime was requested, but current sidecar environment is not CUDA-enabled. Running on CPU.",
+				"GPU mode was requested, but the Dictate GPU runtime is not active. Running on CPU.",
 		});
 	}
 	triggerSelectedModelWarmup("acceleration-mode-change");
@@ -1545,7 +1679,10 @@ async function installAccelerationRuntime(
 		setAccelerationInstallerState({
 			status: "success",
 			mode,
-			message: "NVIDIA acceleration runtime is already installed.",
+			message: "Dictate GPU runtime is already installed.",
+			detail:
+				"Using your existing NVIDIA driver with Dictate's local Python packages.",
+			progress: 1,
 		});
 		lastWarmupSignature = null;
 		triggerSelectedModelWarmup("runtime-install-existing");
@@ -1561,8 +1698,10 @@ async function installAccelerationRuntime(
 	setAccelerationInstallerState({
 		status: "installing",
 		mode,
-		message:
-			"Installing NVIDIA acceleration runtime. This can take several minutes.",
+		message: "Installing Dictate GPU runtime. This can take several minutes.",
+		detail:
+			"Using your existing NVIDIA driver and preparing Dictate's local Python packages.",
+		progress: 0,
 	});
 	await broadcastSnapshot({ target: "main" });
 
@@ -1577,7 +1716,9 @@ async function installAccelerationRuntime(
 		setAccelerationInstallerState({
 			status: "success",
 			mode,
-			message: "NVIDIA acceleration runtime is installed.",
+			message: "Dictate GPU runtime is ready.",
+			detail: "Local NVIDIA models can now use your GPU.",
+			progress: 1,
 		});
 		await broadcastSnapshot({ target: "main" });
 		setTimeout(() => {
@@ -1588,6 +1729,8 @@ async function installAccelerationRuntime(
 				status: "idle",
 				mode: null,
 				message: "",
+				detail: "",
+				progress: null,
 			});
 			void broadcastSnapshot({ target: "main" });
 		}, 3_000);
@@ -1607,10 +1750,12 @@ async function installAccelerationRuntime(
 			status: "error",
 			mode,
 			message,
+			detail: "Check the install log and try again.",
+			progress: null,
 		});
 		await sendToast({
 			type: "error",
-			title: "Runtime install failed",
+			title: "GPU runtime install failed",
 			message,
 		});
 		await broadcastSnapshot({ target: "main" });
@@ -2122,13 +2267,23 @@ function createPillFrame(level: number, atMs: number): PillFramePayload {
 	};
 }
 
-async function getMainViewUrl(): Promise<string> {
+function getPackagedViewPath(view: "main" | "pill"): string {
+	return view === "main"
+		? "views://mainview/index.html"
+		: "views://mainview/pill.html";
+}
+
+function getDevViewPath(view: "main" | "pill"): string {
+	return view === "main" ? "/" : "/pill.html";
+}
+
+async function getViewUrl(view: "main" | "pill"): Promise<string> {
 	const channel = await Updater.localInfo.channel();
 	if (channel === "dev") {
 		try {
 			await fetch(DEV_SERVER_URL, { method: "HEAD" });
 			console.log(`HMR enabled: Using Vite dev server at ${DEV_SERVER_URL}`);
-			return DEV_SERVER_URL;
+			return new URL(getDevViewPath(view), DEV_SERVER_URL).toString();
 		} catch {
 			console.log(
 				"Vite dev server not running. Run 'bun run dev:hmr' for HMR support.",
@@ -2136,12 +2291,7 @@ async function getMainViewUrl(): Promise<string> {
 		}
 	}
 
-	return "views://mainview/index.html";
-}
-
-function withViewQuery(url: string, view: "main" | "pill"): string {
-	const separator = url.includes("?") ? "&" : "?";
-	return `${url}${separator}view=${view}`;
+	return getPackagedViewPath(view);
 }
 
 function getSnapshot(): AppSnapshot {
@@ -3429,7 +3579,7 @@ function createMainWindow(viewUrl: string): BrowserWindow {
 	const initialFrame = getCenteredMainWindowFrame(minimumWidth, minimumHeight);
 	const windowRef = new BrowserWindow({
 		title: "Dictate",
-		url: withViewQuery(viewUrl, "main"),
+		url: viewUrl,
 		rpc: mainRpc,
 		frame: initialFrame,
 	});
@@ -3495,10 +3645,10 @@ function focusOrCreateMainWindow(): void {
 	mainWindow = createMainWindow(mainViewUrl);
 }
 
-function createPillWindow(mainUrl: string): BrowserWindow {
+function createPillWindow(pillUrl: string): BrowserWindow {
 	const windowRef = new BrowserWindow({
 		title: "Dictate Pill",
-		url: withViewQuery(mainUrl, "pill"),
+		url: pillUrl,
 		rpc: pillRpc,
 		transparent: true,
 		titleBarStyle: "hidden",
@@ -3530,17 +3680,20 @@ function ensurePillWindow(): BrowserWindow | null {
 		return pillWindow;
 	}
 
-	if (!mainViewUrl) {
+	if (!pillViewUrl) {
 		console.error("[window] cannot create pill window before bootstrap.");
 		return null;
 	}
 
-	pillWindow = createPillWindow(mainViewUrl);
+	pillWindow = createPillWindow(pillViewUrl);
 	return pillWindow;
 }
 
 async function bootstrap(): Promise<void> {
-	mainViewUrl = await getMainViewUrl();
+	[mainViewUrl, pillViewUrl] = await Promise.all([
+		getViewUrl("main"),
+		getViewUrl("pill"),
+	]);
 	if (!isAutoStartLaunch) {
 		mainWindow = createMainWindow(mainViewUrl);
 	} else {

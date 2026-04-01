@@ -10,7 +10,11 @@ if (!rootElement) {
 	throw new Error("Root element #root was not found.");
 }
 
-const view = new URLSearchParams(window.location.search).get("view") ?? "main";
+const documentView = document.documentElement.dataset.view;
+const searchParams = new URLSearchParams(window.location.search);
+const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ""));
+const view =
+	documentView ?? searchParams.get("view") ?? hashParams.get("view") ?? "main";
 document.documentElement.dataset.view = view;
 initThemeSync();
 

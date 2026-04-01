@@ -13,6 +13,12 @@ export default defineConfig({
 	build: {
 		outDir: "../../dist",
 		emptyOutDir: true,
+		rollupOptions: {
+			input: {
+				main: resolve(__dirname, "src/mainview/index.html"),
+				pill: resolve(__dirname, "src/mainview/pill.html"),
+			},
+		},
 	},
 	server: {
 		port: 5173,

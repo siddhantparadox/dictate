@@ -27,6 +27,7 @@ export function SettingsSection({
 }: SettingsSectionProps) {
 	const {
 		selectedCloudModel,
+		selectedModel,
 		selectedModelLabel,
 		selectedModelProviderLabel,
 		selectedModelReady,
@@ -37,6 +38,21 @@ export function SettingsSection({
 		hotkeyLabel,
 	} = viewModel;
 	const accelerationInstaller = snapshot.accelerationInstaller;
+	const selectedModelRequiresGpuRuntime =
+		selectedModel?.runtime === "nvidia_gpu";
+	const installProgressPercent =
+		typeof accelerationInstaller.progress === "number"
+			? Math.max(
+					0,
+					Math.min(100, Math.round(accelerationInstaller.progress * 100)),
+				)
+			: null;
+	const showRuntimeInstallNotice =
+		settings.accelerationMode === "cuda" &&
+		snapshot.hardware.asrRuntime !== "cuda" &&
+		(selectedModelRequiresGpuRuntime ||
+			isInstallingCuda ||
+			isCudaRuntimePending);
 
 	return (
 		<div className="content-stack settings-screen">
@@ -167,13 +183,16 @@ export function SettingsSection({
 							</span>
 						</div>
 
-						{settings.accelerationMode === "cuda" &&
-						snapshot.hardware.asrRuntime !== "cuda" ? (
+						{showRuntimeInstallNotice ? (
 							<div className="runtime-install-block">
 								<p className="panel-note warning">
 									{isCudaRuntimePending
-										? "CUDA mode requested. Verifying runtime..."
-										: "CUDA mode requested, but CUDA runtime is not active."}
+										? "GPU mode requested. Verifying the Dictate GPU runtime..."
+										: "The current model needs the Dictate GPU runtime before it can use your NVIDIA GPU."}
+								</p>
+								<p className="panel-note">
+									Uses your existing NVIDIA driver and installs Dictate's local
+									Python packages under your profile.
 								</p>
 								{showCudaInstaller ? (
 									<button
@@ -187,28 +206,47 @@ export function SettingsSection({
 										{isInstallingCuda ? (
 											<>
 												<Loader2 className="h-4 w-4 animate-spin" />
-												<span>Installing CUDA runtime</span>
+												<span>Preparing Dictate GPU runtime</span>
 											</>
 										) : (
-											"Install NVIDIA acceleration"
+											"Install Dictate GPU runtime"
 										)}
 									</button>
 								) : null}
 								{isInstallingCuda ? (
 									<div className="model-progress-row inline" aria-live="polite">
-										<div className="model-progress">
-											<div className="model-progress-bar indeterminate" />
+										<div
+											className="model-progress"
+											role="progressbar"
+											aria-label="Dictate GPU runtime install progress"
+											aria-valuemin={0}
+											aria-valuemax={100}
+											aria-valuenow={installProgressPercent ?? undefined}
+										>
+											<div
+												className={`model-progress-bar ${installProgressPercent !== null ? "determinate" : "indeterminate"}`}
+												style={
+													installProgressPercent !== null
+														? { width: `${String(installProgressPercent)}%` }
+														: undefined
+												}
+											/>
 										</div>
 										<p className="model-progress-label">
-											Installing runtime and dependencies...
+											{accelerationInstaller.detail ||
+												accelerationInstaller.message}
+											{installProgressPercent !== null
+												? ` (${installProgressPercent}%)`
+												: ""}
 										</p>
 									</div>
 								) : null}
-								{accelerationInstaller.message ? (
+								{accelerationInstaller.message &&
+								(!isInstallingCuda ||
+									accelerationInstaller.message !==
+										accelerationInstaller.detail) ? (
 									<p
-										className={`panel-note ${
-											accelerationInstaller.status === "error" ? "warning" : ""
-										}`}
+										className={`panel-note ${accelerationInstaller.status === "error" ? "warning" : ""}`}
 									>
 										{accelerationInstaller.message}
 									</p>

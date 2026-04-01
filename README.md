@@ -70,40 +70,54 @@ The app is designed around one primary interaction:
 
 ## Usage
 
-### First Run
+### App Setup
+
+#### Install Dictate
+
+1. Download the latest Windows canary installer `.exe` from GitHub Releases.
+2. Run the installer.
+3. Launch Dictate from the Start Menu or desktop shortcut.
+
+#### First Launch
 
 1. Open Dictate.
 2. Go to `Models`.
 3. Choose `Local` or `Cloud`.
-4. For `Local`, download the model you want to use.
+4. For `Local`, install the model you want to use.
 5. For `Cloud`, connect Groq, Deepgram, AssemblyAI, or OpenRouter with your API key and select a cloud model.
-6. Keep `ASR Acceleration` on `Auto` unless you specifically want to force `CPU` or `CUDA`.
-7. Select the model you want as default.
+6. Keep `Acceleration mode` on `Auto` unless you specifically want to force `CPU` or `GPU`.
+7. Set the model you want as default.
 
-Notes:
+#### Local Setup Notes
 
-- Local models warm up after you select them, especially larger NVIDIA models.
-- The first local transcription can be slower while the runtime loads the model into memory.
+- `Moonshine` models are the easiest local starting point and work without the NVIDIA path.
+- NVIDIA local models require the `Dictate GPU runtime`.
+- The Dictate GPU runtime uses your existing NVIDIA driver and GPU, but installs Dictate's own local Python packages under `%USERPROFILE%\.dictateapp`.
+- Settings shows a live progress bar while the Dictate GPU runtime is being prepared.
+- Local models warm up after selection, especially larger NVIDIA models.
+- The first local transcription can be slower while the selected model loads into memory.
 - Once warm, later local transcriptions are much faster.
 
-Groq setup:
+#### Cloud Provider Setup
+
+Groq:
 
 - Get an API key from [Groq API Keys](https://console.groq.com/keys/)
 - Groq docs overview: [Groq Docs](https://console.groq.com/docs/overview)
 
-Deepgram setup:
+Deepgram:
 
 - Create a key in [Deepgram Console](https://console.deepgram.com/)
 - Deepgram docs home: [Deepgram Docs](https://developers.deepgram.com/home)
 - New Deepgram accounts currently include `$200` of free credit: [Deepgram Pricing](https://deepgram.com/pricing)
 
-AssemblyAI setup:
+AssemblyAI:
 
 - Create a key in [AssemblyAI Dashboard](https://www.assemblyai.com/dashboard)
 - AssemblyAI docs home: [AssemblyAI Docs](https://www.assemblyai.com/docs)
 - AssemblyAI trial accounts currently include `$50` in free credits: [AssemblyAI Support](https://support.assemblyai.com/articles/5370767329-can-i-sign-up-for-free)
 
-OpenRouter setup:
+OpenRouter:
 
 - Create a key in [OpenRouter Keys](https://openrouter.ai/settings/keys)
 - OpenRouter docs home: [OpenRouter Docs](https://openrouter.ai/docs/overview)
@@ -213,8 +227,17 @@ From the repository root:
 ```bash
 bun run typecheck
 bun run lint
-bun run --cwd dictate-app build:canary
+bun run build:canary
 ```
+
+Windows release installer build:
+
+```bash
+bun run build:canary
+bun run build:canary:installer
+```
+
+The maintainer-facing Windows installer is built with Inno Setup as a per-user install under `%LocalAppData%\Programs\Dictate`. The user-facing installer should be the generated `canary` installer `.exe`; Electrobun's canary payload remains the underlying app/update bundle.
 
 ## Data and Model Storage
 
@@ -263,6 +286,7 @@ dictate-app/
 - Local NVIDIA GPU support is still evolving and needs more real-world validation across drivers, CUDA environments, and hardware tiers.
 - TensorRT is not available in the current build. A rollout plan exists in [docs/plans/2026-03-30-tensorrt-rollout-plan.md](D:/projects/dictate/docs/plans/2026-03-30-tensorrt-rollout-plan.md).
 - Cloud provider flows depend on your own API key, provider account limits, and provider-side model availability.
+- Windows packaging is split between the Electrobun canary app payload and the Inno Setup installer layer. Keep both paths in sync when changing release behavior.
 
 ## Contributing
 

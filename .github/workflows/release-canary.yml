@@ -1,0 +1,60 @@
+name: Release Canary Windows Build
+
+on:
+  push:
+    tags:
+      - "v*-canary*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Canary tag to publish, for example v0.1.0-canary.1
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Install Inno Setup
+        run: choco install innosetup --no-progress -y
+
+      - name: Resolve canary tag
+        id: release_tag
+        shell: pwsh
+        run: |
+          if ("${{ github.event_name }}" -eq "workflow_dispatch") {
+            "tag=${{ inputs.tag }}" >> $env:GITHUB_OUTPUT
+          } else {
+            "tag=${{ github.ref_name }}" >> $env:GITHUB_OUTPUT
+          }
+
+      - name: Build canary Windows artifacts
+        run: bun run build:canary
+
+      - name: Build Inno Setup installer
+        run: bun run build:canary:installer
+
+      - name: Publish canary GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.release_tag.outputs.tag }}
+          name: ${{ steps.release_tag.outputs.tag }}
+          prerelease: true
+          generate_release_notes: true
+          files: |
+            dictate-app/artifacts/canary-win-x64-dictate-Setup-canary.exe
+            dictate-app/artifacts/canary-win-x64-dictate-canary.tar.zst
+            dictate-app/artifacts/canary-win-x64-update.json

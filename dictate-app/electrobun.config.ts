@@ -14,6 +14,9 @@ export default {
 		copy: {
 			"dist/index.html": "views/mainview/index.html",
 			"dist/assets": "views/mainview/assets",
+			"sidecar/worker.py": "sidecar/worker.py",
+			"sidecar/bootstrap.ps1": "sidecar/bootstrap.ps1",
+			"sidecar/requirements.txt": "sidecar/requirements.txt",
 		},
 		// Ignore Vite output in watch mode — HMR handles view rebuilds separately
 		watchIgnore: ["dist/**"],

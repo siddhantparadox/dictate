@@ -5,6 +5,8 @@
 		"dev": "bun run --cwd dictate-app dev",
 		"dev:hmr": "bun run --cwd dictate-app dev:hmr",
 		"start": "bun run --cwd dictate-app start",
+		"build:canary": "bun run --cwd dictate-app build:canary",
+		"build:canary:installer": "bun run --cwd dictate-app build:canary:installer",
 		"typecheck": "bun run --cwd dictate-app typecheck",
 		"lint": "bun run --cwd dictate-app lint"
 	}

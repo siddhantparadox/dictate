@@ -32,6 +32,7 @@
   - ElectroBun docs: https://blackboard.sh/electrobun/docs/
   - Bun docs: https://bun.sh/docs
   - Bun SQLite API (`bun:sqlite`): https://bun.sh/docs/api/sqlite
+  - Inno Setup docs: https://jrsoftware.org/ishelp/
   - Python docs: https://docs.python.org/3/
   - NVIDIA Canary-Qwen-2.5B model card: https://huggingface.co/nvidia/canary-qwen-2.5b
   - NVIDIA Parakeet-TDT-0.6B-v3 model card: https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3
@@ -42,6 +43,9 @@
 ## Project Rules
 - Run lint and typechecks after code changes.
 - Use the latest stable releases of tools/libraries.
+- Product messaging can describe the current open-source release as beta, but Electrobun packaging and GitHub release channels should use the native `canary` channel names and artifacts.
+- Windows release installers should be built with Inno Setup as a per-user install under `%LocalAppData%\Programs\Dictate`. Electrobun canary artifacts remain the underlying app/update payload, not the final user-facing installer UX.
+- Follow `RELEASE.md` for the repo's release process, artifact expectations, and GitHub canary workflow conventions.
 
 ## Review guidelines
 - Focus on P0 and P1 issues: security, privacy, crashes, data loss, broken dictation flows, or release-blocking regressions.

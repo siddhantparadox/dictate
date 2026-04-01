@@ -10,6 +10,22 @@ $requirementsPath = Join-Path $PSScriptRoot "requirements.txt"
 $cpuTorchIndexUrl = "https://download.pytorch.org/whl/cpu"
 $cudaTorchIndexUrl = "https://download.pytorch.org/whl/cu128"
 
+function Write-DictateProgress {
+	param(
+		[double]$Percent,
+		[string]$Message,
+		[string]$Detail = ""
+	)
+
+	$normalized = [Math]::Max(0, [Math]::Min(100, $Percent)) / 100
+	$payload = @{
+		progress = [Math]::Round($normalized, 4)
+		message = $Message
+		detail = $Detail
+	} | ConvertTo-Json -Compress
+	Write-Output ("[dictate-progress]" + $payload)
+}
+
 function Initialize-SidecarEnv {
 	param(
 		[string]$VenvName,
@@ -17,9 +33,12 @@ function Initialize-SidecarEnv {
 		[bool]$ExpectCuda
 	)
 
+	$runtimeLabel = if ($ExpectCuda) { "Dictate GPU runtime" } else { "Dictate CPU runtime" }
 	$venvPath = Join-Path $PSScriptRoot $VenvName
 	$venvPython = Join-Path $venvPath "Scripts\python.exe"
 	$needsTorchInstall = $true
+
+	Write-DictateProgress -Percent 5 -Message "Preparing $runtimeLabel" -Detail "Checking local Python environment"
 
 	if (Test-Path $venvPython) {
 		$runtimeJson = & $venvPython -c "import importlib.util, json;
@@ -33,6 +52,7 @@ except Exception:
 			$runtimeMatches = $runtime.ok -and $runtime.cuda -eq $ExpectCuda
 			$hasXet = [bool]$runtime.hf_xet
 			if ($runtimeMatches -and $hasXet) {
+				Write-DictateProgress -Percent 100 -Message "$runtimeLabel is ready" -Detail "Existing environment already matches this machine"
 				Write-Host "$VenvName already matches expected runtime and has hf_xet; skipping reinstall."
 				return $venvPython
 			}
@@ -41,24 +61,32 @@ except Exception:
 	}
 
 	if (-not (Test-Path $venvPython)) {
+		Write-DictateProgress -Percent 14 -Message "Creating $runtimeLabel" -Detail "Creating an isolated Python environment for Dictate"
 		Write-Host "Creating sidecar virtual environment at $venvPath"
 		& $PythonExe -m venv $venvPath
 		$needsTorchInstall = $true
 	} else {
+		Write-DictateProgress -Percent 18 -Message "Refreshing $runtimeLabel" -Detail "Inspecting existing Dictate packages"
 		Write-Host "Refreshing sidecar dependencies at $venvPath"
 	}
 
 	$venvPython = Join-Path $venvPath "Scripts\python.exe"
 	Write-Host "Installing sidecar dependencies into $VenvName..."
-	& $venvPython -m pip install --upgrade pip
-	& $venvPython -m pip install --upgrade -r $requirementsPath
+	Write-DictateProgress -Percent 28 -Message "Upgrading packaging tools" -Detail "Updating pip inside Dictate's local environment"
+	& $venvPython -m pip install --progress-bar off --upgrade pip
+	Write-DictateProgress -Percent 48 -Message "Installing Dictate dependencies" -Detail "Installing Dictate's ASR runtime packages"
+	& $venvPython -m pip install --progress-bar off --upgrade -r $requirementsPath
 	if ($needsTorchInstall) {
-		& $venvPython -m pip install --upgrade --index-url $TorchIndexUrl torch
+		Write-DictateProgress -Percent 72 -Message "Installing GPU acceleration packages" -Detail "Installing the CUDA-enabled PyTorch runtime"
+		& $venvPython -m pip install --progress-bar off --upgrade --index-url $TorchIndexUrl torch
 	} else {
+		Write-DictateProgress -Percent 78 -Message "Using existing GPU acceleration packages" -Detail "CUDA-enabled PyTorch is already available"
 		Write-Host "$VenvName torch runtime already matches expected profile; skipping torch reinstall."
 	}
 
+	Write-DictateProgress -Percent 90 -Message "Validating $runtimeLabel" -Detail "Checking that Dictate can access your NVIDIA GPU"
 	& $venvPython -c "import torch; print(f'torch={torch.__version__} cuda_built={torch.version.cuda} cuda_available={torch.cuda.is_available()}')"
+	Write-DictateProgress -Percent 100 -Message "$runtimeLabel is ready" -Detail "Local NVIDIA models can now use your GPU"
 	return $venvPython
 }
 
@@ -95,3 +123,4 @@ Write-Host "Optional overrides:"
 Write-Host "  - PYTHON_BIN      : force a specific interpreter for all modes"
 Write-Host "  - PYTHON_BIN_CPU  : custom CPU interpreter"
 Write-Host "  - PYTHON_BIN_CUDA : custom CUDA interpreter"
+
