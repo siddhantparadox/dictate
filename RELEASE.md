@@ -47,6 +47,11 @@ The release workflow is:
 
 - `.github/workflows/release-canary.yml`
 
+Important:
+
+- Normal pushes to `main` do **not** create a release
+- A release happens only when you push a matching canary tag or manually dispatch the workflow
+
 It can run in two ways:
 
 1. Push a matching tag like `v0.1.0-canary.1`
@@ -63,16 +68,42 @@ What the workflow does:
 
 ## Recommended Release Steps
 
-1. Run local verification:
+1. Push the intended release commit to `main`
+2. Run local verification:
    - `bun run typecheck`
    - `bun run lint`
-2. Optionally build locally:
+3. Optionally build locally:
    - `bun run build:canary`
    - `bun run build:canary:installer`
-3. Push the release commit
 4. Create and push a tag like `v0.1.0-canary.1`
-5. Wait for GitHub Actions to publish the prerelease
-6. Download and smoke-test the uploaded installer on a clean Windows machine
+5. Wait for GitHub Actions to publish the GitHub release
+6. Edit the GitHub release notes/title if needed
+7. If you want a public release instead of a prerelease, flip the GitHub release state after publish
+8. Download and smoke-test the uploaded installer on a clean Windows machine
+
+## Practical Trigger Flow
+
+Typical release command flow:
+
+```bash
+git push origin main
+git tag -a v0.1.0-canary.1 -m "Release v0.1.0-canary.1"
+git push origin v0.1.0-canary.1
+```
+
+That tag push is what triggers GitHub Actions to build and publish the release.
+
+Manual fallback:
+
+```bash
+gh workflow run release-canary.yml -f tag=v0.1.0-canary.1
+```
+
+Use the manual dispatch path when:
+
+- the tag already exists but the workflow needs to be rerun
+- you fixed the workflow after an earlier failed release
+- you want to rebuild the same release tag intentionally
 
 ## Local Build Notes
 
@@ -100,5 +131,5 @@ Use these conventions consistently:
 
 - Public copy: `beta`
 - Build channel: `canary`
-- GitHub prerelease: `true`
+- GitHub workflow default: prerelease `true`
 - Platform copy: Windows-only for now, Linux planned shortly, macOS later
