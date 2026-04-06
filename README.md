@@ -93,9 +93,11 @@ The app is designed around one primary interaction:
 - `Moonshine` models are the easiest local starting point and work without the NVIDIA path.
 - NVIDIA local models require the `Dictate GPU runtime`.
 - The Dictate GPU runtime uses your existing NVIDIA driver and GPU, but installs Dictate's own local Python packages under `%USERPROFILE%\.dictateapp`.
+- On a fresh NVIDIA setup, preparing the Dictate GPU runtime can take roughly `4 to 5 minutes`.
 - Settings shows a live progress bar while the Dictate GPU runtime is being prepared.
 - Local models warm up after selection, especially larger NVIDIA models.
-- The first local transcription can be slower while the selected model loads into memory.
+- Loading a local model into memory can take about `1 minute`, depending on the model and machine.
+- The first local transcription can be slower while the selected model loads into memory and finishes warming up.
 - Once warm, later local transcriptions are much faster.
 
 #### Cloud Provider Setup
@@ -174,6 +176,8 @@ Important:
 - GPU models require compatible NVIDIA hardware.
 - TensorRT is planned, but not shipped in the current build. NVIDIA models currently run on the PyTorch CUDA path.
 - Local models require a warm-up step after launch or model changes.
+- On a fresh NVIDIA setup, the Dictate GPU runtime can take roughly `4 to 5 minutes` to prepare.
+- Local model loading can take about `1 minute` before the first transcription is ready.
 - The first local transcription can be slower because the selected model has to load and warm up.
 - The app shows warm-up state in the `Models` page for installed local models.
 
