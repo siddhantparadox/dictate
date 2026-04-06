@@ -133,6 +133,7 @@ type WarmupState = AppSnapshot["warmup"];
 const runtimeProbeCache = new Map<string, boolean>();
 const hfXetProbeCache = new Map<string, boolean>();
 const hfXetInstallInFlight = new Map<string, Promise<void>>();
+const commandExistsCache = new Map<string, boolean>();
 const isAutoStartLaunch = process.argv.includes(AUTOSTART_LAUNCH_ARG);
 
 function probeSidecarCudaAvailability(
@@ -230,10 +231,34 @@ function isPathLikeCommand(command: string): boolean {
 }
 
 function commandExists(command: string): boolean {
-	if (!isPathLikeCommand(command)) {
-		return true;
+	if (isPathLikeCommand(command)) {
+		return existsSync(command);
 	}
-	return existsSync(command);
+
+	const cached = commandExistsCache.get(command);
+	if (typeof cached === "boolean") {
+		return cached;
+	}
+
+	try {
+		const lookup =
+			process.platform === "win32"
+				? spawnSync("where.exe", [command], {
+						encoding: "utf8",
+						timeout: 1_500,
+						windowsHide: true,
+					})
+				: spawnSync("which", [command], {
+						encoding: "utf8",
+						timeout: 1_500,
+					});
+		const exists = lookup.status === 0 && lookup.stdout.trim().length > 0;
+		commandExistsCache.set(command, exists);
+		return exists;
+	} catch {
+		commandExistsCache.set(command, false);
+		return false;
+	}
 }
 
 function pickFirstAvailableCommand(commands: string[]): string {
@@ -243,6 +268,23 @@ function pickFirstAvailableCommand(commands: string[]): string {
 		}
 	}
 	return "python";
+}
+
+function resolveBootstrapPythonBin(): string | null {
+	const candidates = [
+		sidecar.getPythonBin(),
+		...cpuRuntimeCandidates,
+		"py",
+		"python",
+	];
+
+	for (const candidate of candidates) {
+		if (candidate && commandExists(candidate)) {
+			return candidate;
+		}
+	}
+
+	return null;
 }
 
 type ResolvedSidecarRuntime = {
@@ -983,6 +1025,32 @@ function sleep(ms: number): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+async function waitForCudaRuntimeReady(
+	maxAttempts = 12,
+	delayMs = 750,
+): Promise<ResolvedSidecarRuntime> {
+	let lastRuntime = resolveSidecarRuntime("cuda");
+
+	for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+		for (const candidate of cudaRuntimeCandidates) {
+			runtimeProbeCache.delete(candidate);
+		}
+		lastRuntime = resolveSidecarRuntime("cuda");
+		appendAppTextLog(
+			"runtime-install",
+			`probe attempt=${attempt + 1}/${maxAttempts} selected=${lastRuntime.pythonBin} runtime=${lastRuntime.runtime} warning=${lastRuntime.warning ?? "none"}`,
+		);
+		if (lastRuntime.runtime === "cuda") {
+			return lastRuntime;
+		}
+		if (attempt < maxAttempts - 1) {
+			await sleep(delayMs);
+		}
+	}
+
+	return lastRuntime;
+}
+
 function isTranscriptionActive(): boolean {
 	return isOneShotTranscriptionActive || activeHoldToTalkJob !== null;
 }
@@ -1721,6 +1789,13 @@ async function runAccelerationBootstrapInstall(mode: "cuda"): Promise<void> {
 		);
 	}
 
+	const bootstrapPythonBin = resolveBootstrapPythonBin();
+	if (!bootstrapPythonBin) {
+		throw new Error(
+			"Dictate could not find a Python interpreter to create the local GPU runtime.",
+		);
+	}
+
 	const powerShell = resolvePowerShellExecutable();
 	const args = [
 		"-NoProfile",
@@ -1728,12 +1803,14 @@ async function runAccelerationBootstrapInstall(mode: "cuda"): Promise<void> {
 		"Bypass",
 		"-File",
 		sidecarBootstrapScript,
+		"-PythonExe",
+		bootstrapPythonBin,
 		"-Runtime",
 		mode,
 	];
 	appendAppTextLog(
 		"runtime-install",
-		`starting mode=${mode} powershell=${powerShell} bootstrap=${sidecarBootstrapScript} cwd=${sidecarProjectRoot}`,
+		`starting mode=${mode} powershell=${powerShell} bootstrap=${sidecarBootstrapScript} python=${bootstrapPythonBin} cwd=${sidecarProjectRoot}`,
 	);
 
 	await new Promise<void>((resolvePromise, rejectPromise) => {
@@ -1950,11 +2027,26 @@ async function installAccelerationRuntime(
 
 	try {
 		await runAccelerationBootstrapInstall(mode);
-		for (const candidate of cudaRuntimeCandidates) {
-			runtimeProbeCache.delete(candidate);
+		const readyRuntime = await waitForCudaRuntimeReady();
+		if (readyRuntime.runtime !== "cuda") {
+			throw new Error(
+				readyRuntime.warning ??
+					"Dictate GPU runtime finished installing, but CUDA never became active.",
+			);
 		}
 		const settings = storage.getSettings();
-		await applyAccelerationMode(settings.accelerationMode);
+		sidecar.setPythonBin(readyRuntime.pythonBin);
+		hardwareSnapshot = buildHardwareSnapshotForRuntime(readyRuntime.runtime);
+		lastWarmupSignature = null;
+		void ensureHfXetForRuntime(
+			readyRuntime.pythonBin,
+			"install-runtime:cuda-ready",
+		);
+		if (settings.accelerationMode === "cuda") {
+			await applyAccelerationMode(settings.accelerationMode);
+		} else {
+			triggerSelectedModelWarmup("runtime-install-ready");
+		}
 
 		setAccelerationInstallerState({
 			status: "success",
