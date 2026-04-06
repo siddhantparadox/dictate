@@ -2,6 +2,7 @@ import { dlopen, FFIType, type Library, type Pointer, suffix } from "bun:ffi";
 import { spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import {
+	appendFileSync,
 	copyFileSync,
 	existsSync,
 	mkdirSync,
@@ -250,9 +251,54 @@ type ResolvedSidecarRuntime = {
 	warning?: string;
 };
 
+type RuntimeCandidateDiagnostic = {
+	pythonBin: string;
+	exists: boolean;
+	probe: boolean | null;
+};
+
+const APP_TEXT_LOG_PATH = join(Utils.paths.userData, "app.txt");
+
 function ensureDirectory(path: string): string {
 	mkdirSync(path, { recursive: true });
 	return path;
+}
+
+function appendAppTextLog(scope: string, message: string): void {
+	try {
+		appendFileSync(
+			APP_TEXT_LOG_PATH,
+			`[${new Date().toISOString()}] [${scope}] ${message}\n`,
+		);
+	} catch {}
+}
+
+function formatRuntimeCandidateDiagnostics(
+	diagnostics: RuntimeCandidateDiagnostic[],
+): string {
+	if (diagnostics.length === 0) {
+		return "no candidates";
+	}
+
+	return diagnostics
+		.map(
+			(candidate) =>
+				`${candidate.pythonBin} exists=${candidate.exists} probe=${candidate.probe === null ? "null" : String(candidate.probe)}`,
+		)
+		.join(" | ");
+}
+
+function collectRuntimeCandidateDiagnostics(
+	candidates: string[],
+): RuntimeCandidateDiagnostic[] {
+	return candidates.map((candidate) => {
+		const exists = commandExists(candidate);
+		return {
+			pythonBin: candidate,
+			exists,
+			probe: exists ? probeSidecarCudaAvailability(candidate) : null,
+		};
+	});
 }
 
 function getSingleInstanceEndpoint(): string {
@@ -518,10 +564,15 @@ const baseHardwareSnapshot = probeHardwareSnapshot();
 function resolveSidecarRuntime(mode: AccelerationMode): ResolvedSidecarRuntime {
 	if (runtimeOverridePython) {
 		const probe = probeSidecarCudaAvailability(runtimeOverridePython);
-		return {
+		const runtime = {
 			pythonBin: runtimeOverridePython,
 			runtime: probe === true ? "cuda" : probe === false ? "cpu" : "unknown",
 		};
+		appendAppTextLog(
+			"runtime",
+			`context=override mode=${mode} selected=${runtime.pythonBin} runtime=${runtime.runtime} overrideProbe=${probe === null ? "null" : String(probe)}`,
+		);
+		return runtime;
 	}
 
 	const resolveCpuRuntime = (): ResolvedSidecarRuntime => {
@@ -532,49 +583,73 @@ function resolveSidecarRuntime(mode: AccelerationMode): ResolvedSidecarRuntime {
 		};
 	};
 
+	const cudaDiagnostics = collectRuntimeCandidateDiagnostics(
+		cudaRuntimeCandidates,
+	);
+
 	if (mode === "auto") {
-		for (const candidate of cudaRuntimeCandidates) {
-			if (!commandExists(candidate)) {
-				continue;
-			}
-			const probe = probeSidecarCudaAvailability(candidate);
-			if (probe === true) {
-				return {
-					pythonBin: candidate,
+		for (const candidate of cudaDiagnostics) {
+			if (candidate.probe === true) {
+				const runtime = {
+					pythonBin: candidate.pythonBin,
 					runtime: "cuda",
 				};
+				appendAppTextLog(
+					"runtime",
+					`context=resolve mode=auto selected=${runtime.pythonBin} runtime=${runtime.runtime} candidates=${formatRuntimeCandidateDiagnostics(cudaDiagnostics)}`,
+				);
+				return runtime;
 			}
 		}
 
-		return resolveCpuRuntime();
+		const runtime = resolveCpuRuntime();
+		appendAppTextLog(
+			"runtime",
+			`context=resolve mode=auto selected=${runtime.pythonBin} runtime=${runtime.runtime} candidates=${formatRuntimeCandidateDiagnostics(cudaDiagnostics)}`,
+		);
+		return runtime;
 	}
 
 	if (mode === "cpu") {
-		return resolveCpuRuntime();
+		const runtime = resolveCpuRuntime();
+		appendAppTextLog(
+			"runtime",
+			`context=resolve mode=cpu selected=${runtime.pythonBin} runtime=${runtime.runtime} candidates=${formatRuntimeCandidateDiagnostics(cudaDiagnostics)}`,
+		);
+		return runtime;
 	}
 
 	let sawCudaCandidate = false;
-	for (const candidate of cudaRuntimeCandidates) {
-		if (!commandExists(candidate)) {
+	for (const candidate of cudaDiagnostics) {
+		if (!candidate.exists) {
 			continue;
 		}
 		sawCudaCandidate = true;
-		const probe = probeSidecarCudaAvailability(candidate);
-		if (probe === true) {
-			return {
-				pythonBin: candidate,
+		if (candidate.probe === true) {
+			const runtime = {
+				pythonBin: candidate.pythonBin,
 				runtime: "cuda",
 			};
+			appendAppTextLog(
+				"runtime",
+				`context=resolve mode=cuda selected=${runtime.pythonBin} runtime=${runtime.runtime} candidates=${formatRuntimeCandidateDiagnostics(cudaDiagnostics)}`,
+			);
+			return runtime;
 		}
 	}
 
 	const cpuRuntime = resolveCpuRuntime();
-	return {
+	const runtime = {
 		...cpuRuntime,
 		warning: sawCudaCandidate
 			? "CUDA mode was selected, but the CUDA runtime probe did not confirm a working CUDA interpreter. Check the startup logs for the exact probe failure."
 			: "CUDA mode was selected, but no CUDA sidecar runtime is installed. Run: pwsh -File sidecar/bootstrap.ps1 -Runtime cuda",
 	};
+	appendAppTextLog(
+		"runtime",
+		`context=resolve mode=cuda selected=${runtime.pythonBin} runtime=${runtime.runtime} warning=${runtime.warning ?? ""} bootstrap=${sidecarBootstrapScript} candidates=${formatRuntimeCandidateDiagnostics(cudaDiagnostics)}`,
+	);
+	return runtime;
 }
 
 function buildHardwareSnapshotForRuntime(
@@ -902,6 +977,7 @@ let warmupInFlight = false;
 let warmupPending = false;
 let lastWarmupSignature: string | null = null;
 let settingsUpdateQueue: Promise<void> = Promise.resolve();
+let cudaRuntimeSelfHealPromise: Promise<void> | null = null;
 
 function sleep(ms: number): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, ms));
@@ -909,6 +985,101 @@ function sleep(ms: number): Promise<void> {
 
 function isTranscriptionActive(): boolean {
 	return isOneShotTranscriptionActive || activeHoldToTalkJob !== null;
+}
+
+function hasInstalledCudaRuntimeCandidate(): boolean {
+	return cudaRuntimeCandidates.some((candidate) => commandExists(candidate));
+}
+
+function selectedModelUsesNvidiaRuntime(settings: DictateSettings): boolean {
+	if (!isLocalModelId(settings.defaultModelId)) {
+		return false;
+	}
+
+	const model = modelsCache.find(
+		(candidate) => candidate.id === settings.defaultModelId,
+	);
+	return model?.runtime === "nvidia_gpu";
+}
+
+function shouldAutoRepairCudaRuntime(
+	settings: DictateSettings,
+	runtime?: ResolvedSidecarRuntime,
+): boolean {
+	if (process.platform !== "win32") {
+		return false;
+	}
+	if (runtimeOverridePython) {
+		return false;
+	}
+	if (baseHardwareSnapshot.gpuVendor !== "nvidia") {
+		return false;
+	}
+	if (isTranscriptionActive()) {
+		return false;
+	}
+	if (accelerationInstallerState.status === "installing") {
+		return false;
+	}
+	if (hasInstalledCudaRuntimeCandidate()) {
+		return false;
+	}
+
+	const resolvedRuntime =
+		runtime ?? resolveSidecarRuntime(settings.accelerationMode);
+	if (resolvedRuntime.runtime === "cuda") {
+		return false;
+	}
+
+	if (settings.accelerationMode === "cuda") {
+		return true;
+	}
+
+	return (
+		settings.accelerationMode === "auto" &&
+		selectedModelUsesNvidiaRuntime(settings)
+	);
+}
+
+function triggerCudaRuntimeSelfHeal(reason: string): boolean {
+	if (cudaRuntimeSelfHealPromise) {
+		appendAppTextLog(
+			"runtime-self-heal",
+			`skipped reason=${reason} inFlight=true`,
+		);
+		return true;
+	}
+
+	const settings = storage.getSettings();
+	const runtime = resolveSidecarRuntime(settings.accelerationMode);
+	if (!shouldAutoRepairCudaRuntime(settings, runtime)) {
+		appendAppTextLog(
+			"runtime-self-heal",
+			`skipped reason=${reason} mode=${settings.accelerationMode} runtime=${runtime.runtime} hasCandidate=${hasInstalledCudaRuntimeCandidate()}`,
+		);
+		return false;
+	}
+
+	appendAppTextLog(
+		"runtime-self-heal",
+		`starting reason=${reason} mode=${settings.accelerationMode} runtime=${runtime.runtime} defaultModel=${settings.defaultModelId}`,
+	);
+
+	cudaRuntimeSelfHealPromise = (async () => {
+		try {
+			await installAccelerationRuntime("cuda");
+			appendAppTextLog("runtime-self-heal", `success reason=${reason}`);
+		} catch (error) {
+			appendAppTextLog(
+				"runtime-self-heal",
+				`error reason=${reason} message=${error instanceof Error ? error.message : String(error)}`,
+			);
+		} finally {
+			cudaRuntimeSelfHealPromise = null;
+		}
+	})();
+
+	return true;
 }
 
 function updateJobCache(job: JobRecord): void {
@@ -1560,6 +1731,10 @@ async function runAccelerationBootstrapInstall(mode: "cuda"): Promise<void> {
 		"-Runtime",
 		mode,
 	];
+	appendAppTextLog(
+		"runtime-install",
+		`starting mode=${mode} powershell=${powerShell} bootstrap=${sidecarBootstrapScript} cwd=${sidecarProjectRoot}`,
+	);
 
 	await new Promise<void>((resolvePromise, rejectPromise) => {
 		const child = spawn(powerShell, args, {
@@ -1640,6 +1815,10 @@ async function runAccelerationBootstrapInstall(mode: "cuda"): Promise<void> {
 		});
 
 		child.on("error", (error) => {
+			appendAppTextLog(
+				"runtime-install",
+				`spawn-error mode=${mode} message=${error.message}`,
+			);
 			rejectPromise(
 				new Error(`Failed to start runtime installer: ${error.message}`),
 			);
@@ -1648,9 +1827,14 @@ async function runAccelerationBootstrapInstall(mode: "cuda"): Promise<void> {
 		child.on("close", (code) => {
 			flushRemainders();
 			if (code === 0) {
+				appendAppTextLog("runtime-install", `finished mode=${mode} exitCode=0`);
 				resolvePromise();
 				return;
 			}
+			appendAppTextLog(
+				"runtime-install",
+				`failed mode=${mode} exitCode=${code ?? "unknown"} stderr=${stderrBuffer || "none"}`,
+			);
 			rejectPromise(
 				new Error(
 					`Runtime installer failed with exit code ${code ?? "unknown"}${stderrBuffer ? `: ${stderrBuffer}` : ""}`,
@@ -1668,7 +1852,34 @@ async function applyAccelerationMode(mode: AccelerationMode): Promise<void> {
 	console.log(
 		`[sidecar] acceleration mode=${mode}; python=${runtime.pythonBin}; runtime=${runtime.runtime}`,
 	);
+	appendAppTextLog(
+		"runtime",
+		`apply mode=${mode} selected=${runtime.pythonBin} runtime=${runtime.runtime} warning=${runtime.warning ?? "none"}`,
+	);
 	if (mode === "cuda" && runtime.runtime !== "cuda") {
+		const startedSelfHeal = triggerCudaRuntimeSelfHeal(
+			"acceleration-mode-change",
+		);
+		if (startedSelfHeal) {
+			setWarmupState({
+				state: "loading_runtime",
+				modelId: storage.getSettings().defaultModelId,
+				detail: "Preparing Dictate GPU runtime for local NVIDIA models.",
+			});
+			await broadcastSnapshot({ target: "main" });
+			await sendToast({
+				type: "info",
+				title: "Preparing GPU runtime",
+				message:
+					"Dictate is repairing the local GPU runtime so NVIDIA models can use your GPU.",
+			});
+			return;
+		}
+
+		appendAppTextLog(
+			"runtime",
+			`gpu-unavailable mode=${mode} warning=${runtime.warning ?? "GPU mode was requested, but the Dictate GPU runtime is not active. Running on CPU."}`,
+		);
 		await sendToast({
 			type: "warning",
 			title: "GPU runtime unavailable",
@@ -1693,6 +1904,10 @@ async function installAccelerationRuntime(
 	}
 
 	const existingRuntime = resolveSidecarRuntime(mode);
+	appendAppTextLog(
+		"runtime-install",
+		`requested mode=${mode} existingRuntime=${existingRuntime.runtime} python=${existingRuntime.pythonBin} warning=${existingRuntime.warning ?? "none"}`,
+	);
 	if (existingRuntime.runtime === "cuda") {
 		sidecar.setPythonBin(existingRuntime.pythonBin);
 		hardwareSnapshot = buildHardwareSnapshotForRuntime(existingRuntime.runtime);
@@ -1711,6 +1926,10 @@ async function installAccelerationRuntime(
 		lastWarmupSignature = null;
 		triggerSelectedModelWarmup("runtime-install-existing");
 		await broadcastSnapshot({ target: "main" });
+		appendAppTextLog(
+			"runtime-install",
+			`already-installed mode=${mode} python=${existingRuntime.pythonBin}`,
+		);
 		return {
 			mode,
 			status: "installed",
@@ -1745,6 +1964,10 @@ async function installAccelerationRuntime(
 			progress: 1,
 		});
 		await broadcastSnapshot({ target: "main" });
+		appendAppTextLog(
+			"runtime-install",
+			`success mode=${mode} selected=${sidecar.getPythonBin()} runtime=${hardwareSnapshot.asrRuntime}`,
+		);
 		setTimeout(() => {
 			if (accelerationInstallerState.status !== "success") {
 				return;
@@ -1770,6 +1993,10 @@ async function installAccelerationRuntime(
 			error instanceof Error
 				? error.message
 				: "Unknown runtime installation error.";
+		appendAppTextLog(
+			"runtime-install",
+			`error mode=${mode} message=${message}`,
+		);
 		setAccelerationInstallerState({
 			status: "error",
 			mode,
@@ -3478,10 +3705,20 @@ function createWindowRpc(windowName: "main" | "pill") {
 						const selectedModel = modelsCache.find(
 							(candidate) => candidate.id === modelId,
 						);
+						const startedSelfHeal =
+							selectedModel?.runtime === "nvidia_gpu" &&
+							triggerCudaRuntimeSelfHeal("default-model-change");
 						const unsupportedReason = getUnsupportedModelReason(modelId);
 						const inactiveGpuRuntimeReason =
 							getInactiveGpuRuntimeReason(modelId);
-						if (
+						if (startedSelfHeal) {
+							setWarmupState({
+								state: "loading_runtime",
+								modelId,
+								detail:
+									"Preparing Dictate GPU runtime for the selected NVIDIA model.",
+							});
+						} else if (
 							selectedModel?.status === "installed" &&
 							!unsupportedReason &&
 							!inactiveGpuRuntimeReason &&
@@ -3873,9 +4110,20 @@ async function bootstrap(): Promise<void> {
 		pendingExternalOpenRequest = false;
 		focusOrCreateMainWindow();
 	}
-	setTimeout(() => {
-		triggerSelectedModelWarmup("startup");
-	}, MODEL_WARMUP_BOOT_DELAY_MS);
+	const startedStartupSelfHeal = triggerCudaRuntimeSelfHeal("startup");
+	if (startedStartupSelfHeal) {
+		setWarmupState({
+			state: "loading_runtime",
+			modelId: storage.getSettings().defaultModelId,
+			detail: "Preparing Dictate GPU runtime for local NVIDIA models.",
+		});
+		await broadcastSnapshot({ target: "main" });
+	}
+	if (!startedStartupSelfHeal) {
+		setTimeout(() => {
+			triggerSelectedModelWarmup("startup");
+		}, MODEL_WARMUP_BOOT_DELAY_MS);
+	}
 
 	console.log("Dictate MVP started.");
 }

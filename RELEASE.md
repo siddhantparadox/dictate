@@ -14,6 +14,7 @@ Dictate currently ships as a Windows-only release.
 GitHub CI publishes these files from the canary workflow:
 
 - `dictate-app/artifacts/canary-win-x64-dictate-Setup-canary.exe`
+- `dictate-app/artifacts/canary-win-x64-dictate-Setup-canary.zip`
 - `dictate-app/artifacts/canary-win-x64-dictate-canary.tar.zst`
 - `dictate-app/artifacts/canary-win-x64-update.json`
 
@@ -23,6 +24,9 @@ What each file is for:
   - User-facing Windows installer
   - Built with Inno Setup
   - Installs per-user under `%LocalAppData%\Programs\Dictate`
+- `canary-win-x64-dictate-Setup-canary.zip`
+  - Convenience archive containing the packaged Electrobun setup wrapper and payload files
+  - Useful when a user prefers downloading a zip instead of the direct installer `.exe`
 - `canary-win-x64-dictate-canary.tar.zst`
   - Electrobun packaged app payload
   - Keep this in the release for updater and release metadata purposes
@@ -65,6 +69,7 @@ What the workflow does:
 4. Builds the Electrobun canary payload
 5. Wraps that payload with Inno Setup
 6. Publishes a GitHub prerelease with the canary artifacts
+7. Uploads the same files as GitHub Actions workflow artifacts for debugging
 
 ## Recommended Release Steps
 
@@ -131,5 +136,5 @@ Use these conventions consistently:
 
 - Public copy: `beta`
 - Build channel: `canary`
-- GitHub workflow default: prerelease `true`
+- GitHub workflow default: publish a normal release and replace existing assets for the same canary tag
 - Platform copy: Windows-only for now, Linux planned shortly, macOS later
