@@ -162,10 +162,18 @@ function evaluateSupport(
 	}
 
 	if (model.runtime === "nvidia_gpu") {
-		if (!hardware.cudaAvailable) {
+		if (hardware.gpuVendor !== "nvidia") {
 			return {
 				hardwareSupport: "unsupported",
 				hardwareReason: "Requires an NVIDIA GPU with CUDA support.",
+			};
+		}
+
+		if (!hardware.cudaAvailable) {
+			return {
+				hardwareSupport: "works_slow",
+				hardwareReason:
+					"NVIDIA GPU detected, but Dictate's CUDA runtime is not active yet.",
 			};
 		}
 

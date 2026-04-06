@@ -8,8 +8,10 @@ import {
 	readdirSync,
 	renameSync,
 	rmSync,
+	unlinkSync,
 } from "node:fs";
-import { homedir } from "node:os";
+import { createConnection, createServer, type Server } from "node:net";
+import { homedir, tmpdir } from "node:os";
 import { join, resolve, sep } from "node:path";
 import Electrobun, {
 	BrowserView,
@@ -103,6 +105,7 @@ const MODEL_WARMUP_STAGE_DELAY_MS = 140;
 const WINDOWS_RUN_REGISTRY_KEY = String.raw`HKCU\Software\Microsoft\Windows\CurrentVersion\Run`;
 const WINDOWS_RUN_VALUE_NAME = "Dictate";
 const AUTOSTART_LAUNCH_ARG = "--autostart";
+const SINGLE_INSTANCE_CHANNEL_NAME = "dev.dictate.desktop.single-instance";
 
 const VK_CONTROL = 0x11;
 const VK_SHIFT = 0x10;
@@ -250,6 +253,14 @@ type ResolvedSidecarRuntime = {
 function ensureDirectory(path: string): string {
 	mkdirSync(path, { recursive: true });
 	return path;
+}
+
+function getSingleInstanceEndpoint(): string {
+	if (process.platform === "win32") {
+		return `\\\\.\\pipe\\${SINGLE_INSTANCE_CHANNEL_NAME}`;
+	}
+
+	return join(tmpdir(), `${SINGLE_INSTANCE_CHANNEL_NAME}.sock`);
 }
 
 function formatSpawnSyncOutput(result: ReturnType<typeof spawnSync>): string {
@@ -571,7 +582,7 @@ function buildHardwareSnapshotForRuntime(
 ): AppSnapshot["hardware"] {
 	return {
 		...baseHardwareSnapshot,
-		cudaAvailable: runtime === "cuda",
+		cudaAvailable: baseHardwareSnapshot.cudaAvailable,
 		asrRuntime: runtime,
 	};
 }
@@ -663,6 +674,8 @@ let pillWindow: BrowserWindow | null = null;
 let trayRef: Tray | null = null;
 let mainViewUrl: string | null = null;
 let pillViewUrl: string | null = null;
+let singleInstanceServer: Server | null = null;
+let pendingExternalOpenRequest = false;
 let shuttingDown = false;
 let hidePillTimer: ReturnType<typeof setTimeout> | null = null;
 let recordingTicker: ReturnType<typeof setInterval> | null = null;
@@ -1226,6 +1239,17 @@ async function warmLocalModelNow(
 	modelId: LocalModelId,
 	reason: string,
 ): Promise<boolean> {
+	const inactiveGpuRuntimeReason = getInactiveGpuRuntimeReason(modelId);
+	if (inactiveGpuRuntimeReason) {
+		setWarmupState({
+			state: "error",
+			modelId,
+			detail: inactiveGpuRuntimeReason,
+		});
+		await broadcastSnapshot({ target: "main" });
+		return false;
+	}
+
 	const signature = buildWarmupSignature(modelId);
 	if (lastWarmupSignature === signature) {
 		setWarmupState({
@@ -1778,6 +1802,30 @@ function getUnsupportedModelReason(modelId: ModelId): string | null {
 		return null;
 	}
 	return model.hardwareReason ?? "Model is not supported on this hardware.";
+}
+
+function getInactiveGpuRuntimeReason(modelId: ModelId): string | null {
+	if (!isLocalModelId(modelId)) {
+		return null;
+	}
+
+	const model = modelsCache.find((candidate) => candidate.id === modelId);
+	if (
+		!model ||
+		model.runtime !== "nvidia_gpu" ||
+		model.hardwareSupport === "unsupported" ||
+		hardwareSnapshot.gpuVendor !== "nvidia" ||
+		hardwareSnapshot.asrRuntime === "cuda"
+	) {
+		return null;
+	}
+
+	const settings = storage.getSettings();
+	if (settings.accelerationMode === "cuda") {
+		return "NVIDIA GPU detected, but the Dictate GPU runtime is not active yet. Repair or reinstall the Dictate GPU runtime in Settings.";
+	}
+
+	return "NVIDIA GPU detected. Switch Acceleration mode to GPU or install the Dictate GPU runtime in Settings to use this model.";
 }
 
 function normalizeHotkey(hotkey: string): string {
@@ -2696,6 +2744,15 @@ async function runMicrophoneTranscription(
 		});
 		throw new Error(unsupportedReason);
 	}
+	const inactiveGpuRuntimeReason = getInactiveGpuRuntimeReason(modelId);
+	if (inactiveGpuRuntimeReason) {
+		await sendToast({
+			type: "warning",
+			title: "GPU runtime not active",
+			message: inactiveGpuRuntimeReason,
+		});
+		throw new Error(inactiveGpuRuntimeReason);
+	}
 	if (isCloudModelId(modelId)) {
 		try {
 			ensureCloudProviderConfig(modelId);
@@ -2787,6 +2844,15 @@ async function startHoldToTalkTranscription(source: string): Promise<void> {
 			type: "error",
 			title: "Model not supported",
 			message: unsupportedReason,
+		});
+		return;
+	}
+	const inactiveGpuRuntimeReason = getInactiveGpuRuntimeReason(modelId);
+	if (inactiveGpuRuntimeReason) {
+		await sendToast({
+			type: "warning",
+			title: "GPU runtime not active",
+			message: inactiveGpuRuntimeReason,
 		});
 		return;
 	}
@@ -3413,9 +3479,12 @@ function createWindowRpc(windowName: "main" | "pill") {
 							(candidate) => candidate.id === modelId,
 						);
 						const unsupportedReason = getUnsupportedModelReason(modelId);
+						const inactiveGpuRuntimeReason =
+							getInactiveGpuRuntimeReason(modelId);
 						if (
 							selectedModel?.status === "installed" &&
 							!unsupportedReason &&
+							!inactiveGpuRuntimeReason &&
 							!warmupInFlight
 						) {
 							await runExclusiveWarmLocalModel(modelId, "default-model-change");
@@ -3645,6 +3714,78 @@ function focusOrCreateMainWindow(): void {
 	mainWindow = createMainWindow(mainViewUrl);
 }
 
+function handleExternalOpenRequest(): void {
+	pendingExternalOpenRequest = true;
+	if (!mainViewUrl) {
+		return;
+	}
+
+	pendingExternalOpenRequest = false;
+	focusOrCreateMainWindow();
+}
+
+async function signalExistingInstanceToFocus(): Promise<boolean> {
+	return await new Promise<boolean>((resolve) => {
+		const client = createConnection(getSingleInstanceEndpoint(), () => {
+			client.end();
+			resolve(true);
+		});
+
+		client.once("error", () => {
+			resolve(false);
+		});
+	});
+}
+
+async function claimPrimaryInstance(): Promise<boolean> {
+	if (singleInstanceServer) {
+		return true;
+	}
+
+	const endpoint = getSingleInstanceEndpoint();
+	return await new Promise<boolean>((resolve, reject) => {
+		const server = createServer((socket) => {
+			handleExternalOpenRequest();
+			socket.end();
+		});
+
+		const listen = () => {
+			server.listen(endpoint, () => {
+				singleInstanceServer = server;
+				resolve(true);
+			});
+		};
+
+		server.once("error", (error: NodeJS.ErrnoException) => {
+			void (async () => {
+				if (error.code !== "EADDRINUSE") {
+					reject(error);
+					return;
+				}
+
+				const signaled = await signalExistingInstanceToFocus();
+				if (signaled) {
+					server.close();
+					resolve(false);
+					return;
+				}
+
+				if (process.platform !== "win32" && existsSync(endpoint)) {
+					try {
+						unlinkSync(endpoint);
+					} catch {}
+					listen();
+					return;
+				}
+
+				reject(error);
+			})();
+		});
+
+		listen();
+	});
+}
+
 function createPillWindow(pillUrl: string): BrowserWindow {
 	const windowRef = new BrowserWindow({
 		title: "Dictate Pill",
@@ -3728,6 +3869,10 @@ async function bootstrap(): Promise<void> {
 	}
 	void ensureHfXetForRuntime(initialRuntime.pythonBin, "startup:active");
 	await broadcastSnapshot();
+	if (pendingExternalOpenRequest) {
+		pendingExternalOpenRequest = false;
+		focusOrCreateMainWindow();
+	}
 	setTimeout(() => {
 		triggerSelectedModelWarmup("startup");
 	}, MODEL_WARMUP_BOOT_DELAY_MS);
@@ -3781,6 +3926,18 @@ Electrobun.events.on("before-quit", () => {
 		nativeWindowIconLibrary = null;
 		setNativeWindowIconFn = null;
 	}
+	if (singleInstanceServer) {
+		singleInstanceServer.close();
+		singleInstanceServer = null;
+	}
+	if (process.platform !== "win32") {
+		try {
+			const endpoint = getSingleInstanceEndpoint();
+			if (existsSync(endpoint)) {
+				unlinkSync(endpoint);
+			}
+		} catch {}
+	}
 	sidecar.stop();
 	storage.close();
 	if (trayRef) {
@@ -3795,5 +3952,22 @@ Electrobun.events.on("before-quit", () => {
 	}
 });
 
-configureWindowsDpiAwareness();
-void bootstrap();
+async function startApplication(): Promise<void> {
+	const isPrimaryInstance = await claimPrimaryInstance();
+	if (!isPrimaryInstance) {
+		shuttingDown = true;
+		Utils.quit();
+		return;
+	}
+
+	configureWindowsDpiAwareness();
+	await bootstrap();
+}
+
+void startApplication().catch((error) => {
+	console.error(
+		"[startup] failed to start Dictate:",
+		error instanceof Error ? error.message : error,
+	);
+	Utils.quit();
+});
